@@ -68,6 +68,7 @@ class ProgressSpinner:
 @click.option("--min-bpm", default=50.0, help="最小 BPM", show_default=True)
 @click.option("--max-bpm", default=200.0, help="最大 BPM", show_default=True)
 @click.option("--complexity", default=1.0, help="谱面复杂度 (0.5-2.0)", show_default=True)
+@click.option("--ln-tendency", default=0.5, help="长音倾向 (0=尽量少, 1=尽量多)", show_default=True)
 def main(
     input_file: str,
     output_dir: str,
@@ -88,6 +89,7 @@ def main(
     min_bpm: float,
     max_bpm: float,
     complexity: float,
+    ln_tendency: float,
 ):
     """Mustaff - 从音频自动生成音游曲谱
 
@@ -133,8 +135,12 @@ def main(
         snap_to_beat=snap_to_beat,
         snap_resolution=int(snap_resolution),
         complexity=complexity,
+        ln_tendency=ln_tendency,
     )
-    notes = mapper.map_notes(features, beat_subdivisions=beat_subdivisions)
+    notes = mapper.map_notes(
+        features, beat_subdivisions=beat_subdivisions,
+        rms_full=analyzer.rms, pitches_full=analyzer.pitches,
+    )
 
     click.echo(f"  音符数: {len(notes)}")
 

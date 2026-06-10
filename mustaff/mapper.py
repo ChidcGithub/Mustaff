@@ -21,6 +21,7 @@ class BeatMapper:
         snap_to_beat: bool = False,
         snap_resolution: int = 8,
         complexity: float = 1.0,
+        ln_tendency: float = 0.5,
     ):
         self.keys = keys
         self.min_pitch = min_pitch
@@ -36,12 +37,15 @@ class BeatMapper:
         self.snap_to_beat = snap_to_beat
         self.snap_resolution = snap_resolution
         self.complexity = complexity
+        self.ln_tendency = ln_tendency
 
     def map_notes(
         self,
         features: List[Dict[str, Any]],
         auto_range: bool = True,
         beat_subdivisions: Optional[np.ndarray] = None,
+        rms_full: Optional[np.ndarray] = None,
+        pitches_full: Optional[np.ndarray] = None,
     ) -> List[Dict[str, Any]]:
         if not features:
             return []
@@ -64,7 +68,10 @@ class BeatMapper:
 
         valid_positions = self._filter_by_density(sorted_features, assignments)
 
-        notes = self._generate_notes(sorted_features, assignments, valid_positions)
+        notes = self._generate_notes(
+            sorted_features, assignments, valid_positions,
+            rms_full=rms_full, pitches_full=pitches_full,
+        )
 
         if self.snap_to_beat and beat_subdivisions is not None and len(beat_subdivisions) > 0:
             notes = self._snap_notes(notes, beat_subdivisions)
@@ -311,16 +318,39 @@ class BeatMapper:
 
         return valid
 
+    def _calc_sustain_score(
+        self, rms_slice: np.ndarray, pitches_slice: Optional[np.ndarray],
+        rms_global_max: float,
+    ) -> float:
+        if len(rms_slice) < 2:
+            return 0.0
+        avg_rms = float(np.mean(rms_slice))
+        min_rms = float(np.min(rms_slice))
+        rms_base = max(rms_global_max, 1e-6)
+        avg_ratio = avg_rms / rms_base
+        min_ratio = min_rms / rms_base
+        energy_score = avg_ratio * 0.6 + min_ratio * 0.4
+        stability = 0.5
+        if pitches_slice is not None and len(pitches_slice) > 0:
+            valid_p = pitches_slice[~np.isnan(pitches_slice)]
+            if len(valid_p) > 1:
+                p_std = float(np.std(valid_p))
+                stability = 1.0 - min(p_std / 12.0, 1.0)
+        return energy_score * 0.7 + stability * 0.3
+
     def _generate_notes(
         self,
         features: List[Dict[str, Any]],
         assignments: List[int],
         valid_indices: List[int],
+        rms_full: Optional[np.ndarray] = None,
+        pitches_full: Optional[np.ndarray] = None,
     ) -> List[Dict[str, Any]]:
         notes: List[Dict[str, Any]] = []
         rms_values = [features[i]["rms"] for i in valid_indices]
         rms_max = max(rms_values) if rms_values else 1.0
         ln_threshold = rms_max * self.ln_threshold_ratio
+        rms_global_max = float(np.max(rms_full)) if rms_full is not None and len(rms_full) > 0 else rms_max
 
         if self.hold_position_strength > 0 and len(valid_indices) > 1:
             all_times = [features[i]["time_ms"] for i in valid_indices]
@@ -335,6 +365,7 @@ class BeatMapper:
         complexity = max(0.5, min(2.0, self.complexity))
         hold_chance = 1.0 - (complexity - 0.5) * 0.3
         hold_chance = max(0.3, min(1.0, hold_chance))
+        sustain_threshold = max(0.05, 1.0 - self.ln_tendency * 0.7)
 
         for pos, idx in enumerate(valid_indices):
             feat = features[idx]
@@ -352,20 +383,34 @@ class BeatMapper:
             note_type = "hit"
             end_time = None
 
-            if self.use_energy_for_ln and rms >= effective_threshold:
-                if pos + 1 < len(valid_indices):
+            if self.use_energy_for_ln:
+                if rms_full is not None and pos + 1 < len(valid_indices):
+                    next_feat = features[valid_indices[pos + 1]]
+                    gap = next_feat["time_ms"] - time_ms
+                    if gap >= self.min_hold_ms:
+                        f_start = int(feat["frame"])
+                        f_end = int(next_feat["frame"])
+                        if f_end > f_start:
+                            rms_slice = rms_full[f_start:f_end]
+                            p_slice = pitches_full[f_start:f_end] if pitches_full is not None else None
+                            score = self._calc_sustain_score(rms_slice, p_slice, rms_global_max)
+                            if score >= sustain_threshold:
+                                end_time = time_ms + int(gap * 0.8)
+                                note_type = "hold"
+                elif pos + 1 < len(valid_indices):
                     next_time = features[valid_indices[pos + 1]]["time_ms"]
                     gap = next_time - time_ms
-                    if gap >= self.min_hold_ms:
+                    if rms >= effective_threshold and gap >= self.min_hold_ms:
                         if np.random.random() < hold_chance:
                             end_time = time_ms + int(gap * 0.8)
                             note_type = "hold"
                 else:
-                    duration = int(200 + (rms / rms_max) * 800)
-                    if duration >= self.min_hold_ms:
-                        if np.random.random() < hold_chance:
-                            end_time = time_ms + duration
-                            note_type = "hold"
+                    if rms >= effective_threshold:
+                        duration = int(200 + (rms / rms_max) * 800)
+                        if duration >= self.min_hold_ms:
+                            if np.random.random() < hold_chance:
+                                end_time = time_ms + duration
+                                note_type = "hold"
 
             notes.append({
                 "time": time_ms,

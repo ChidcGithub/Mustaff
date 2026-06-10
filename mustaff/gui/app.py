@@ -181,6 +181,13 @@ class MustaffGUI:
                     textvariable=self.max_bpm_var, width=8).grid(row=row, column=1, sticky="w", pady=int(2*s))
         row += 1
 
+        ttk.Label(self._adv_content, text="长音倾向:").grid(row=row, column=0, sticky="w", pady=int(2*s))
+        self.ln_tendency_var = tk.DoubleVar(value=0.5)
+        ttk.Scale(self._adv_content, from_=0.0, to=1.0, variable=self.ln_tendency_var,
+                  orient="horizontal", length=int(120*s)).grid(row=row, column=1, padx=int(5*s), pady=int(2*s))
+        ttk.Label(self._adv_content, textvariable=self.ln_tendency_var, width=4).grid(row=row, column=2)
+        row += 1
+
         out_frame = ttk.LabelFrame(left_frame, text="输出目录", padding=int(10*s))
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self.out_label = ttk.Label(out_frame, text=os.getcwd(), foreground="gray")
@@ -329,6 +336,7 @@ class MustaffGUI:
                 self.min_bpm_var.get(),
                 self.max_bpm_var.get(),
                 self.complexity_var.get(),
+                self.ln_tendency_var.get(),
             ),
             daemon=True,
         )
@@ -340,7 +348,8 @@ class MustaffGUI:
                          onset_sensitivity: float = 0.5, backtrack: bool = False,
                          multi_band: bool = False, snap_to_beat: bool = False,
                          snap_resolution: int = 8, min_bpm: float = 50.0,
-                         max_bpm: float = 200.0, complexity: float = 1.0):
+                         max_bpm: float = 200.0, complexity: float = 1.0,
+                         ln_tendency: float = 0.5):
         """后台线程执行生成任务"""
         def report(step: int, total: int, msg: str):
             self._progress_queue.put({"type": "progress", "step": step, "total": total, "msg": msg})
@@ -375,8 +384,12 @@ class MustaffGUI:
                 snap_to_beat=snap_to_beat,
                 snap_resolution=snap_resolution,
                 complexity=complexity,
+                ln_tendency=ln_tendency,
             )
-            notes = mapper.map_notes(features, beat_subdivisions=beat_subdivisions)
+            notes = mapper.map_notes(
+                features, beat_subdivisions=beat_subdivisions,
+                rms_full=analyzer.rms, pitches_full=analyzer.pitches,
+            )
 
             report(85, 100, "导出文件...")
             base_name = os.path.splitext(os.path.basename(input_path))[0]
