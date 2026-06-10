@@ -153,13 +153,16 @@ class PreviewCanvas(tk.Canvas):
     LANE_COLORS = ["#141428", "#1a1a35"]
     LANE_LINE_COLOR = "#333355"
     JUDGE_LINE_COLOR = "#00e5ff"
-    HIT_COLOR = "#4FC3F7"
-    HOLD_COLOR = "#FF8A65"
-    HOLD_BORDER = "#ffab91"
     HIT_EFFECT_COLOR = "#ffffff"
     TIMELINE_BG = "#222240"
     TIMELINE_FG = "#4FC3F7"
     TEXT_COLOR = "#cccccc"
+
+    LANE_PALETTES = {
+        4: ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A"],
+        6: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#A78BFA", "#FFA07A"],
+        7: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#6C5CE7", "#A78BFA", "#FFA07A"],
+    }
 
     def __init__(
         self,
@@ -168,17 +171,19 @@ class PreviewCanvas(tk.Canvas):
         keys: int = 4,
         duration_ms: float = 0.0,
         audio_player: Optional[AudioPlayer] = None,
+        scale: float = 1.0,
         **kwargs
     ):
         self.keys = keys
         self.notes = notes
         self.duration_ms = duration_ms
         self.player = audio_player
+        self._scale = scale
 
         # 渲染参数
-        self.lane_width = 70
-        self.fall_speed = 350  # 像素/秒
-        self.hit_disappear_ms = 120  # hit 音符穿过判定线后多久消失
+        self.lane_width = int(70 * scale)
+        self.fall_speed = int(350 * scale)
+        self.hit_disappear_ms = 120
 
         # 动画状态
         self._running = False
@@ -191,11 +196,12 @@ class PreviewCanvas(tk.Canvas):
         self._dragging_timeline = False
 
         # 布局参数（初始默认值，会在首次 _on_resize 时更新）
-        self.canvas_width = max(400, keys * self.lane_width + 40)
-        self.canvas_height = 520
-        self.judge_line_y = 400
-        self.lane_offset_x = 20
-        self._timeline_y = 490
+        s = self._scale
+        self.canvas_width = max(int(400*s), keys * self.lane_width + int(40*s))
+        self.canvas_height = int(520*s)
+        self.judge_line_y = int(400*s)
+        self.lane_offset_x = int(20*s)
+        self._timeline_y = int(490*s)
         self._play_btn = None
         self._play_text = None
         self._timeline_fg = None
@@ -225,13 +231,23 @@ class PreviewCanvas(tk.Canvas):
         self._on_resize()
         self._bind_events()
 
+    def _lane_colors(self) -> list:
+        if self.keys in self.LANE_PALETTES:
+            return self.LANE_PALETTES[self.keys]
+        import colorsys
+        colors = []
+        for i in range(self.keys):
+            hue = (i / self.keys) * 0.85
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
+            colors.append(f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}")
+        return colors
+
     def _on_resize(self, event=None):
-        """自适应父容器尺寸，重新计算所有布局参数"""
         new_w = self.winfo_width()
         new_h = self.winfo_height()
+        s = self._scale
 
-        # 过滤无效尺寸和微小变化
-        if new_w < 100 or new_h < 100:
+        if new_w < int(100*s) or new_h < int(100*s):
             return
         if new_w == getattr(self, '_last_width', 0) and new_h == getattr(self, '_last_height', 0):
             return
@@ -241,15 +257,13 @@ class PreviewCanvas(tk.Canvas):
         self.canvas_width = new_w
         self.canvas_height = new_h
 
-        # 判定线位置：固定留出底部 110px（时间轴 25 + 播放按钮 35 + D标签 20 + 间距）
-        self.judge_line_y = self.canvas_height - 110
-        if self.judge_line_y < 100:
-            self.judge_line_y = 100  # 最小判定线位置
+        self.judge_line_y = self.canvas_height - int(110*s)
+        if self.judge_line_y < int(100*s):
+            self.judge_line_y = int(100*s)
         self.view_window_ms = (self.judge_line_y / self.fall_speed) * 1000
 
-        # 轨道宽度：根据可用宽度计算，限制在 40~90px
-        available_width = self.canvas_width - 40
-        self.lane_width = max(40, min(90, available_width // self.keys))
+        available_width = self.canvas_width - int(40*s)
+        self.lane_width = max(int(40*s), min(int(90*s), available_width // self.keys))
         total_lanes_width = self.keys * self.lane_width
         self.lane_offset_x = (self.canvas_width - total_lanes_width) // 2
 
@@ -265,11 +279,10 @@ class PreviewCanvas(tk.Canvas):
     # ------------------ 初始化 ------------------
 
     def _build_static_elements(self):
-        """绘制静态元素（轨道背景、判定线、时间轴背景、播放按钮）"""
         ox = self.lane_offset_x
         ch = self.canvas_height
+        s = self._scale
 
-        # 轨道背景
         for i in range(self.keys):
             x0 = ox + i * self.lane_width
             x1 = x0 + self.lane_width
@@ -279,67 +292,61 @@ class PreviewCanvas(tk.Canvas):
                 fill=color, outline="", tags="static"
             )
 
-        # 轨道分隔线
         for i in range(self.keys + 1):
             x = ox + i * self.lane_width
             self.create_line(
                 x, 0, x, ch,
-                fill=self.LANE_LINE_COLOR, width=1, tags="static"
+                fill=self.LANE_LINE_COLOR, width=max(1, int(1*s)), tags="static"
             )
 
-        # Key 标签（判定线下方 15px）
         for i in range(self.keys):
             x = ox + i * self.lane_width + self.lane_width // 2
             self.create_text(
-                x, self.judge_line_y + 15,
+                x, self.judge_line_y + int(15*s),
                 text=f"D{i+1}",
                 fill=self.TEXT_COLOR,
-                font=("Consolas", 10),
+                font=("Consolas", max(8, int(10*s))),
                 tags="static"
             )
 
-        # 判定线
         self.create_line(
             ox, self.judge_line_y,
             ox + self.keys * self.lane_width, self.judge_line_y,
-            fill=self.JUDGE_LINE_COLOR, width=2, tags="static"
+            fill=self.JUDGE_LINE_COLOR, width=max(1, int(2*s)), tags="static"
         )
 
-        # 时间轴（底部向上 20px）
-        self._timeline_y = ch - 20
+        self._timeline_y = ch - int(20*s)
         self.create_rectangle(
-            ox, self._timeline_y - 8,
-            ox + self.keys * self.lane_width, self._timeline_y + 8,
+            ox, self._timeline_y - int(8*s),
+            ox + self.keys * self.lane_width, self._timeline_y + int(8*s),
             fill=self.TIMELINE_BG, outline="#444", width=1, tags="static"
         )
         self._timeline_fg = self.create_rectangle(
-            ox, self._timeline_y - 8, ox, self._timeline_y + 8,
+            ox, self._timeline_y - int(8*s), ox, self._timeline_y + int(8*s),
             fill=self.TIMELINE_FG, outline="", tags="timeline"
         )
 
-        # 时间显示
         self._time_text = self.create_text(
-            self.canvas_width // 2, 20,
+            self.canvas_width // 2, int(20*s),
             text="00:00.000 / 00:00.000",
             fill=self.TEXT_COLOR,
-            font=("Consolas", 12),
+            font=("Consolas", max(8, int(12*s))),
             tags="static"
         )
 
-        # 播放控制按钮（D标签下方，时间轴上方）
-        btn_y = self.judge_line_y + 45
-        if btn_y + 25 > self._timeline_y - 10:
-            btn_y = self._timeline_y - 35
+        btn_y = self.judge_line_y + int(45*s)
+        if btn_y + int(25*s) > self._timeline_y - int(10*s):
+            btn_y = self._timeline_y - int(35*s)
         self._play_btn = self.create_rectangle(
-            self.canvas_width // 2 - 30, btn_y,
-            self.canvas_width // 2 + 30, btn_y + 25,
+            self.canvas_width // 2 - int(30*s), btn_y,
+            self.canvas_width // 2 + int(30*s), btn_y + int(25*s),
             fill="#2a2a4a", outline="#555", width=1, tags="btn"
         )
         self._play_text = self.create_text(
-            self.canvas_width // 2, btn_y + 12,
+            self.canvas_width // 2, btn_y + int(12*s),
             text="▶ 播放",
             fill=self.TEXT_COLOR,
-            font=("Consolas", 11),
+            font=("Consolas", max(8, int(11*s))),
             tags="btn"
         )
 
@@ -358,12 +365,12 @@ class PreviewCanvas(tk.Canvas):
                 self._toggle_play()
                 return
 
-        # 检查是否点击时间轴
+        s = self._scale
         ox = self.lane_offset_x
         timeline_x0 = ox
         timeline_x1 = ox + self.keys * self.lane_width
         if (timeline_x0 <= event.x <= timeline_x1 and
-                self._timeline_y - 12 <= event.y <= self._timeline_y + 12):
+                self._timeline_y - int(12*s) <= event.y <= self._timeline_y + int(12*s)):
             self._dragging_timeline = True
             self._seek_to_x(event.x)
 
@@ -434,7 +441,6 @@ class PreviewCanvas(tk.Canvas):
 
     def _render_frame(self, current_ms: float):
         """渲染一帧"""
-        # 1. 清除动态元素
         for item in self._note_items:
             self.delete(item)
         self._note_items.clear()
@@ -443,17 +449,15 @@ class PreviewCanvas(tk.Canvas):
             self.delete(item)
         self._effect_items.clear()
 
-        # 2. 更新时间显示
         self._update_time_text(current_ms)
-
-        # 3. 更新时间轴进度
         self._update_timeline(current_ms)
 
-        # 4. 计算视野范围
-        view_top_ms = current_ms - 200  # 稍早的也显示一点
+        view_top_ms = current_ms - int(200 * self._scale)
         view_bottom_ms = current_ms + self.view_window_ms
 
-        # 5. 渲染音符
+        lane_colors = self._lane_colors()
+        playing = self.player is not None and not self.player._paused
+
         for idx, note in enumerate(self.notes):
             note_time = note["time"]
             col = note["column"]
@@ -463,7 +467,8 @@ class PreviewCanvas(tk.Canvas):
             if col < 0 or col >= self.keys:
                 col = col % self.keys
 
-            # 判断是否在视野内
+            note_color = lane_colors[col % len(lane_colors)]
+
             if note_type == "hold" and end_time:
                 visible = not (end_time < view_top_ms or note_time > view_bottom_ms)
             else:
@@ -471,44 +476,40 @@ class PreviewCanvas(tk.Canvas):
             if not visible:
                 continue
 
-            # 计算Y坐标
             def time_to_y(t: float) -> float:
-                dt = (t - current_ms) / 1000.0  # 秒
+                dt = (t - current_ms) / 1000.0
                 return self.judge_line_y - dt * self.fall_speed
 
-            x0 = self.lane_offset_x + col * self.lane_width + 4
-            x1 = self.lane_offset_x + (col + 1) * self.lane_width - 4
+            s = self._scale
+            x0 = self.lane_offset_x + col * self.lane_width + int(4*s)
+            x1 = self.lane_offset_x + (col + 1) * self.lane_width - int(4*s)
 
             if note_type == "hold" and end_time:
                 y_head = time_to_y(note_time)
                 y_tail = time_to_y(end_time)
-                # 限制在画布内
-                y_head = max(-20, min(self.canvas_height + 20, y_head))
-                y_tail = max(-20, min(self.canvas_height + 20, y_tail))
+                y_head = max(int(-20*s), min(self.canvas_height + int(20*s), y_head))
+                y_tail = max(int(-20*s), min(self.canvas_height + int(20*s), y_tail))
 
-                # hold 主体
                 item = self.create_rectangle(
-                    x0 + 4, y_head, x1 - 4, y_tail,
-                    fill=self.HOLD_COLOR, outline=self.HOLD_BORDER, width=1
+                    x0 + int(4*s), y_head, x1 - int(4*s), y_tail,
+                    fill=note_color, outline=note_color, width=1, stipple="gray25"
                 )
                 self._note_items.append(item)
-                # hold 头部
                 item = self.create_rectangle(
-                    x0, y_head - 4, x1, y_head + 4,
-                    fill=self.HOLD_COLOR, outline="white", width=1
+                    x0, y_head - int(4*s), x1, y_head + int(4*s),
+                    fill=note_color, outline="white", width=max(1, int(1*s))
                 )
                 self._note_items.append(item)
             else:
                 y = time_to_y(note_time)
-                if -20 <= y <= self.canvas_height + 20:
+                if int(-20*s) <= y <= self.canvas_height + int(20*s):
                     item = self.create_rectangle(
-                        x0 + 8, y - 6, x1 - 8, y + 6,
-                        fill=self.HIT_COLOR, outline="white", width=1
+                        x0 + int(8*s), y - int(6*s), x1 - int(8*s), y + int(6*s),
+                        fill=note_color, outline="white", width=max(1, int(2*s))
                     )
                     self._note_items.append(item)
 
-            # 6. 自动打击效果
-            if not self.player or self.player._paused:
+            if not playing:
                 continue
 
             if idx not in self._hit_set:
@@ -516,9 +517,8 @@ class PreviewCanvas(tk.Canvas):
                     self._hit_set.add(idx)
                     self._spawn_hit_effect(col)
 
-            # hold 尾部离开判定线的效果
             if note_type == "hold" and end_time:
-                if idx + 100000 not in self._hit_set:  # 用偏移区分hold尾
+                if idx + 100000 not in self._hit_set:
                     if current_ms >= end_time and current_ms <= end_time + 80:
                         self._hit_set.add(idx + 100000)
                         self._spawn_hit_effect(col, is_hold_end=True)
@@ -544,40 +544,51 @@ class PreviewCanvas(tk.Canvas):
         self.coords(self._timeline_fg, timeline_x0, self._timeline_y - 8, x, self._timeline_y + 8)
 
     def _spawn_hit_effect(self, col: int, is_hold_end: bool = False):
-        """在判定线位置生成打击光效"""
         cx = self.lane_offset_x + col * self.lane_width + self.lane_width // 2
         cy = self.judge_line_y
-        size = self.lane_width // 2 + 5 if not is_hold_end else self.lane_width // 2
-        color = self.HIT_EFFECT_COLOR if not is_hold_end else self.HOLD_BORDER
-        self._hit_effects.append({
-            "cx": cx,
-            "cy": cy,
-            "size": size,
-            "alpha": 1.0,
-            "color": color,
-        })
+        lane_colors = self._lane_colors()
+        base_color = lane_colors[col % len(lane_colors)]
+        color = base_color if not is_hold_end else "#ffffff"
+        s = self._scale
+        base_size = self.lane_width // 2 + int(5*s)
+
+        for offset in range(3):
+            self._hit_effects.append({
+                "cx": cx,
+                "cy": cy,
+                "size": base_size + offset * int(8*s),
+                "alpha": 0.9 - offset * 0.2,
+                "alpha_speed": 0.07 + offset * 0.02,
+                "expand_speed": int(3*s) + offset * int(1.5*s),
+                "color": color,
+            })
 
     def _update_hit_effects(self):
-        """更新并绘制打击效果（渐隐动画）"""
         new_effects = []
+        s = self._scale
         for eff in self._hit_effects:
-            eff["alpha"] -= 0.08
-            eff["size"] += 2
+            eff["alpha"] -= eff["alpha_speed"]
+            eff["size"] += eff["expand_speed"]
             if eff["alpha"] <= 0:
                 continue
             new_effects.append(eff)
 
-            # 使用颜色+透明度模拟
-            a = int(eff["alpha"] * 255)
-            color = eff["color"]
-            # tkinter 不支持alpha，用outline+stipple模拟或直接用颜色深浅
-            # 简单做法：用颜色+扩大尺寸模拟扩散
+            width = max(1, int((2 + eff["alpha"] * 4) * s))
             item = self.create_oval(
                 eff["cx"] - eff["size"], eff["cy"] - eff["size"] // 2,
                 eff["cx"] + eff["size"], eff["cy"] + eff["size"] // 2,
-                outline=color, width=2 + int(eff["alpha"] * 3),
+                outline=eff["color"], width=width,
             )
             self._effect_items.append(item)
+
+            inner_size = eff["size"] * 0.6
+            if inner_size > int(6*s):
+                item = self.create_oval(
+                    eff["cx"] - inner_size, eff["cy"] - inner_size // 2,
+                    eff["cx"] + inner_size, eff["cy"] + inner_size // 2,
+                    outline=eff["color"], width=max(1, width - 1),
+                )
+                self._effect_items.append(item)
 
         self._hit_effects = new_effects
 

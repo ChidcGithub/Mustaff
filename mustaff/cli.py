@@ -1,10 +1,3 @@
-"""
-命令行工具
-
-Usage:
-    mustaff-cli input.mp3 --output-dir ./maps --format osu --keys 4
-"""
-
 from __future__ import annotations
 
 import os
@@ -25,7 +18,7 @@ class ProgressSpinner:
     """简易进度动画"""
 
     def __init__(self):
-        self._chars = "|/-\\"  # ASCII-safe for Windows console
+        self._chars = "|/-\\"
         self._idx = 0
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -57,59 +50,24 @@ class ProgressSpinner:
 
 @click.command()
 @click.argument("input_file", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--output-dir", "-o",
-    default=".",
-    help="输出目录",
-)
-@click.option(
-    "--format", "-f",
-    type=click.Choice(["osu", "json", "both"], case_sensitive=False),
-    default="both",
-    help="输出格式",
-)
-@click.option(
-    "--keys", "-k",
-    type=click.IntRange(1, 9),
-    default=4,
-    help="轨道数 (1-9)",
-)
-@click.option(
-    "--title", "-t",
-    default=None,
-    help="歌曲标题（默认使用文件名）",
-)
-@click.option(
-    "--artist", "-a",
-    default="Unknown Artist",
-    help="艺术家",
-)
-@click.option(
-    "--difficulty", "-d",
-    default="Auto-generated",
-    help="难度名",
-)
-@click.option(
-    "--sr",
-    default=22050,
-    help="分析采样率",
-)
-@click.option(
-    "--density",
-    default=30.0,
-    help="密度过滤阈值（毫秒）",
-)
-@click.option(
-    "--ln-threshold",
-    default=0.7,
-    help="长按音符能量阈值（0.0-1.0）",
-)
-@click.option(
-    "--preview", "-p",
-    is_flag=True,
-    default=False,
-    help="同时生成谱面预览图 (PNG)",
-)
+@click.option("--output-dir", "-o", default=".", help="输出目录")
+@click.option("--format", "-f", type=click.Choice(["osu", "json", "both"], case_sensitive=False), default="both", help="输出格式")
+@click.option("--keys", "-k", type=click.IntRange(1, 9), default=4, help="轨道数 (1-9)")
+@click.option("--title", "-t", default=None, help="歌曲标题（默认使用文件名）")
+@click.option("--artist", "-a", default="Unknown Artist", help="艺术家")
+@click.option("--difficulty", "-d", default="Auto-generated", help="难度名")
+@click.option("--sr", default=22050, help="分析采样率")
+@click.option("--density", default=30.0, help="密度过滤阈值（毫秒）")
+@click.option("--ln-threshold", default=0.7, help="长按音符能量阈值（0.0-1.0）")
+@click.option("--preview", "-p", is_flag=True, default=False, help="同时生成谱面预览图 (PNG)")
+@click.option("--onset-sensitivity", default=0.5, help="Onset 检测灵敏度 (0.1-1.0)", show_default=True)
+@click.option("--backtrack/--no-backtrack", default=False, help="启用 Onset 回溯定位", show_default=True)
+@click.option("--multi-band/--no-multi-band", default=False, help="多频段 Onset 检测", show_default=True)
+@click.option("--snap-to-beat", is_flag=True, default=False, help="吸附到节拍网格")
+@click.option("--snap-resolution", type=click.Choice(["4", "8", "16", "32"], case_sensitive=False), default="8", help="节拍吸附精度", show_default=True)
+@click.option("--min-bpm", default=50.0, help="最小 BPM", show_default=True)
+@click.option("--max-bpm", default=200.0, help="最大 BPM", show_default=True)
+@click.option("--complexity", default=1.0, help="谱面复杂度 (0.5-2.0)", show_default=True)
 def main(
     input_file: str,
     output_dir: str,
@@ -122,6 +80,14 @@ def main(
     density: float,
     ln_threshold: float,
     preview: bool,
+    onset_sensitivity: float,
+    backtrack: bool,
+    multi_band: bool,
+    snap_to_beat: bool,
+    snap_resolution: str,
+    min_bpm: float,
+    max_bpm: float,
+    complexity: float,
 ):
     """Mustaff - 从音频自动生成音游曲谱
 
@@ -134,7 +100,14 @@ def main(
     spinner.start("加载音频...")
 
     t0 = time.time()
-    analyzer = AudioAnalyzer(sr=sr)
+    analyzer = AudioAnalyzer(
+        sr=sr,
+        onset_sensitivity=onset_sensitivity,
+        backtrack=backtrack,
+        multi_band=multi_band,
+        min_bpm=min_bpm,
+        max_bpm=max_bpm,
+    )
     analyzer.load(input_file)
 
     def on_progress(pct: int, msg: str):
@@ -146,22 +119,28 @@ def main(
     t_analyze = time.time() - t0
     spinner.stop(f"  BPM: {analyzer.tempo:.1f}  Onset: {len(analyzer.onset_times)}  ({t_analyze:.1f}s)")
 
-    # 映射音符
     features = analyzer.get_note_features()
+
+    beat_subdivisions = None
+    if snap_to_beat:
+        beat_subdivisions = analyzer.get_beat_subdivisions(resolution=int(snap_resolution))
+        click.echo(f"  节拍网格: {len(beat_subdivisions)} 点 (1/{snap_resolution} 拍)")
+
     mapper = BeatMapper(
         keys=keys,
         density_filter_ms=density,
         ln_threshold_ratio=ln_threshold,
+        snap_to_beat=snap_to_beat,
+        snap_resolution=int(snap_resolution),
+        complexity=complexity,
     )
-    notes = mapper.map_notes(features)
+    notes = mapper.map_notes(features, beat_subdivisions=beat_subdivisions)
 
     click.echo(f"  音符数: {len(notes)}")
 
-    # 确保输出目录
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(input_file))[0]
 
-    # 并行导出多格式（I/O 密集，线程并行有效）
     export_tasks = []
     if format in ("osu", "both"):
         osu_path = os.path.join(output_dir, f"{base_name}.osu")
@@ -190,7 +169,6 @@ def main(
             task()
             click.echo(f"[OK] 已导出 {name} 谱面: {path}")
 
-    # 预览图
     if preview:
         spinner.update("生成预览图...")
         preview_path = os.path.join(output_dir, f"{base_name}.png")

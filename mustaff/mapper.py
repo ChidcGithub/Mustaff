@@ -1,12 +1,3 @@
-"""
-谱面映射模块
-
-将音频分析结果（onset、音高、能量）映射为音游音符。
-- 横向：onset 时间点 → 音符出现时间
-- 纵向：音高/频率 → 轨道列（Column），采用时序感知的直方图均衡化策略
-- 强度：音量/RMS → 音符类型或难度修饰
-"""
-
 from typing import List, Dict, Any, Optional, Set
 import numpy as np
 
@@ -27,22 +18,10 @@ class BeatMapper:
         min_hold_ms: float = 200.0,
         window_size_s: float = 2.0,
         hold_position_strength: float = 0.2,
+        snap_to_beat: bool = False,
+        snap_resolution: int = 8,
+        complexity: float = 1.0,
     ):
-        """
-        Args:
-            keys: 轨道数（4K/6K/7K）
-            min_pitch: 最小音高（Hz），自动检测时设为 None
-            max_pitch: 最大音高（Hz），自动检测时设为 None
-            use_energy_for_ln: 是否根据能量自动生成长按音符（Hold/LN）
-            ln_threshold_ratio: 能量超过该比例时生成长按音符
-            density_filter_ms: 密度过滤阈值（毫秒），小于该间隔的音符会被过滤
-            chord_gap_ms: 和弦判定间隔（毫秒），该间隔内的多个音符视为和弦
-            jack_threshold_ms: 同列最小间隔（毫秒），小于此值会尝试偏移
-            min_hold_ms: 最小长按时长（毫秒）
-            window_size_s: 时序分段窗口大小（秒），用于局部音高排序
-            hold_position_strength: 强弱位置权重（0~1）。值越大，
-                音频开头/结尾的 hold 越少，中间越多。0 表示关闭。
-        """
         self.keys = keys
         self.min_pitch = min_pitch
         self.max_pitch = max_pitch
@@ -54,36 +33,19 @@ class BeatMapper:
         self.min_hold_ms = min_hold_ms
         self.window_size_s = window_size_s
         self.hold_position_strength = hold_position_strength
+        self.snap_to_beat = snap_to_beat
+        self.snap_resolution = snap_resolution
+        self.complexity = complexity
 
     def map_notes(
         self,
         features: List[Dict[str, Any]],
         auto_range: bool = True,
+        beat_subdivisions: Optional[np.ndarray] = None,
     ) -> List[Dict[str, Any]]:
-        """将特征列表映射为音符列表
-
-        算法流程：
-        1. 和弦检测 — 时间上极近的音符合并为和弦，分配到相邻列
-        2. 列分配 — 按时序分段，段内按音高排序 + 循环轮询（局部直方图均衡化）
-        3. Jack 防护 — 同列过密时主动偏移到邻列
-        4. 密度过滤 — 确保最小列间距，节拍上的音符优先保留
-        5. 智能 Hold — 根据与下一个 onset 的间距决定 hold 时长
-
-        Args:
-            features: AudioAnalyzer.get_note_features() 的输出
-            auto_range: 是否根据输入特征自动计算音高范围
-
-        Returns:
-            音符列表，每个音符包含：
-                - time: 时间（毫秒）
-                - column: 轨道列（0-based）
-                - type: 'hit' 或 'hold'
-                - end_time: hold 的结束时间（毫秒），hit 时为 None
-        """
         if not features:
             return []
 
-        # 按时间排序
         sorted_indices = sorted(
             range(len(features)), key=lambda i: features[i]["time_ms"]
         )
@@ -91,25 +53,22 @@ class BeatMapper:
 
         n = len(sorted_features)
 
-        # Step 1: 和弦检测
         chords = self._detect_chords(sorted_features)
         chord_positions: Set[int] = set()
         for chord in chords:
             chord_positions.update(chord)
 
-        # Step 2: 列分配（和弦 → 相邻列；非和弦 → 时序分段 + 音高排序）
         assignments = self._assign_columns(sorted_features, chords, chord_positions)
 
-        # Step 3: Jack 防护
         assignments = self._prevent_jacks(sorted_features, assignments)
 
-        # Step 4: 密度过滤（节拍优先）
         valid_positions = self._filter_by_density(sorted_features, assignments)
 
-        # Step 5: 生成音符（智能 Hold 时长）
         notes = self._generate_notes(sorted_features, assignments, valid_positions)
 
-        # 恢复原始顺序
+        if self.snap_to_beat and beat_subdivisions is not None and len(beat_subdivisions) > 0:
+            notes = self._snap_notes(notes, beat_subdivisions)
+
         result = [None] * n
         for i, note in enumerate(notes):
             original_idx = sorted_indices[valid_positions[i]]
@@ -117,10 +76,45 @@ class BeatMapper:
 
         return [r for r in result if r is not None]
 
-    # ---------- Step 1: 和弦检测 ----------
+    def _snap_notes(
+        self,
+        notes: List[Dict[str, Any]],
+        beat_subdivisions: np.ndarray,
+    ) -> List[Dict[str, Any]]:
+        if not notes:
+            return []
+
+        snapped: List[Dict[str, Any]] = []
+        for note in notes:
+            t = note["time"] / 1000.0
+            idx = np.argmin(np.abs(beat_subdivisions - t))
+            snapped_time = int(round(beat_subdivisions[idx] * 1000))
+
+            snapped_note = dict(note)
+            snapped_note["time"] = snapped_time
+            if snapped_note.get("end_time"):
+                end_t = snapped_note["end_time"] / 1000.0
+                idx_end = np.argmin(np.abs(beat_subdivisions - end_t))
+                snapped_note["end_time"] = int(round(beat_subdivisions[idx_end] * 1000))
+
+            snapped.append(snapped_note)
+
+        merged: List[Dict[str, Any]] = []
+        time_col_map: Dict[tuple, Dict] = {}
+        for note in snapped:
+            key = (note["time"], note["column"])
+            if key in time_col_map:
+                existing = time_col_map[key]
+                if note["type"] == "hold" and existing["type"] == "hit":
+                    existing["type"] = "hold"
+                    existing["end_time"] = note["end_time"]
+            else:
+                time_col_map[key] = dict(note)
+
+        merged = sorted(time_col_map.values(), key=lambda x: x["time"])
+        return merged
 
     def _detect_chords(self, features: List[Dict[str, Any]]) -> List[List[int]]:
-        """检测和弦：连续 notes 间隔 <= chord_gap_ms 则合并为一个和弦"""
         chords: List[List[int]] = []
         i = 0
         while i < len(features):
@@ -136,23 +130,15 @@ class BeatMapper:
                 i += 1
         return chords
 
-    # ---------- Step 2: 列分配 ----------
-
     def _assign_columns(
         self,
         features: List[Dict[str, Any]],
         chords: List[List[int]],
         chord_positions: Set[int],
     ) -> List[int]:
-        """分配列号
-
-        - 和弦音符：分配到相邻列，按音高排序
-        - 非和弦音符：按时序分段，段内按音高排序后轮询分配
-        """
         n = len(features)
         assignments = [-1] * n
 
-        # 2a. 和弦：分配到相邻列
         for chord in chords:
             chord_sorted = sorted(chord, key=lambda i: features[i]["pitch_hz"] or 0)
 
@@ -167,7 +153,6 @@ class BeatMapper:
                 for rank, idx in enumerate(chord_sorted):
                     assignments[idx] = start_col + rank
 
-        # 2b. 非和弦：时序分段 + 局部音高排序
         non_chord = [i for i in range(n) if i not in chord_positions]
         if not non_chord:
             return assignments
@@ -187,9 +172,25 @@ class BeatMapper:
                     break
 
             seg_indices = non_chord[seg_start:seg_end]
-            # 段内按音高排序，循环轮询分配
             seg_indices.sort(key=lambda i: features[i]["pitch_hz"] or 0)
-            for rank, idx in enumerate(seg_indices):
+
+            used_columns = set()
+            band_positions: Dict[int, List[int]] = {}
+            for idx in seg_indices:
+                band = features[idx].get("band", 0)
+                band_positions.setdefault(band, []).append(idx)
+
+            sorted_bands = sorted(band_positions.items())
+            for band, band_indices in sorted_bands:
+                for idx in band_indices:
+                    for col in range(self.keys):
+                        if col not in used_columns:
+                            assignments[idx] = col
+                            used_columns.add(col)
+                            break
+
+            unassigned = [i for i in seg_indices if assignments[i] < 0]
+            for rank, idx in enumerate(unassigned):
                 assignments[idx] = rank % self.keys
 
             seg_start = seg_end
@@ -201,7 +202,6 @@ class BeatMapper:
         features: List[Dict[str, Any]],
         chord_indices: List[int],
     ) -> int:
-        """根据和弦的平均音高映射到居中的列"""
         pitches = [features[i]["pitch_hz"] or 0 for i in chord_indices]
         avg_pitch = sum(pitches) / len(pitches)
 
@@ -219,14 +219,12 @@ class BeatMapper:
         col_range = max(1, self.keys - len(chord_indices))
         return int(norm * col_range)
 
-    # ---------- Step 3: Jack 防护 ----------
-
     def _prevent_jacks(
         self,
         features: List[Dict[str, Any]],
         assignments: List[int],
     ) -> List[int]:
-        """同列过密时尝试将后一个音符移到邻列"""
+        adjusted_threshold = self.jack_threshold_ms / max(0.1, self.complexity)
         assignments = list(assignments)
 
         for col in range(self.keys):
@@ -237,7 +235,7 @@ class BeatMapper:
                     i += 1
                     continue
                 time_ms = features[i]["time_ms"]
-                if time_ms - last_time < self.jack_threshold_ms:
+                if time_ms - last_time < adjusted_threshold:
                     moved = False
                     for offset in [1, -1, 2, -2]:
                         new_col = col + offset
@@ -260,14 +258,14 @@ class BeatMapper:
 
         return assignments
 
-    # ---------- Step 4: 密度过滤 ----------
-
     def _filter_by_density(
         self,
         features: List[Dict[str, Any]],
         assignments: List[int],
     ) -> List[int]:
-        """密度过滤，节拍上的音符获得更高保留优先级"""
+        adjusted_density = self.density_filter_ms / max(0.1, self.complexity)
+        adjusted_density_beat = adjusted_density * 0.5
+
         last_time_per_column: Dict[int, int] = {}
         valid: List[int] = []
 
@@ -286,7 +284,7 @@ class BeatMapper:
                 if test_col < 0 or test_col >= self.keys:
                     continue
                 last_time = last_time_per_column.get(test_col, -999999)
-                if time_ms - last_time >= self.density_filter_ms:
+                if time_ms - last_time >= adjusted_density:
                     column = test_col
                     placed = True
                     break
@@ -295,7 +293,6 @@ class BeatMapper:
                 last_time_per_column[column] = time_ms
                 valid.append(i)
             else:
-                # 节拍上的音符放宽保留条件
                 if features[i].get("near_beat", False):
                     best_col = original_col
                     best_gap = 0
@@ -308,13 +305,11 @@ class BeatMapper:
                         if gap > best_gap:
                             best_gap = gap
                             best_col = test_col
-                    if best_gap >= self.density_filter_ms * 0.5:
+                    if best_gap >= adjusted_density_beat:
                         last_time_per_column[best_col] = time_ms
                         valid.append(i)
 
         return valid
-
-    # ---------- Step 5: 生成音符 ----------
 
     def _generate_notes(
         self,
@@ -322,13 +317,11 @@ class BeatMapper:
         assignments: List[int],
         valid_indices: List[int],
     ) -> List[Dict[str, Any]]:
-        """生成音符列表，包含智能 Hold 时长判断和位置权重"""
         notes: List[Dict[str, Any]] = []
         rms_values = [features[i]["rms"] for i in valid_indices]
         rms_max = max(rms_values) if rms_values else 1.0
         ln_threshold = rms_max * self.ln_threshold_ratio
 
-        # 计算位置权重所需的时间范围
         if self.hold_position_strength > 0 and len(valid_indices) > 1:
             all_times = [features[i]["time_ms"] for i in valid_indices]
             t_min = min(all_times)
@@ -339,15 +332,18 @@ class BeatMapper:
             t_min = 0.0
             t_range = 1.0
 
+        complexity = max(0.5, min(2.0, self.complexity))
+        hold_chance = 1.0 - (complexity - 0.5) * 0.3
+        hold_chance = max(0.3, min(1.0, hold_chance))
+
         for pos, idx in enumerate(valid_indices):
             feat = features[idx]
             time_ms = feat["time_ms"]
             column = assignments[idx]
             rms = feat["rms"]
 
-            # 位置权重：开头/结尾阈值高，中间阈值低
             if self.hold_position_strength > 0:
-                norm = (time_ms - t_min) / t_range  # 0~1
+                norm = (time_ms - t_min) / t_range
                 weight = 1.0 + self.hold_position_strength * (8.0 * (norm - 0.5) ** 2 - 1.0)
                 effective_threshold = ln_threshold * weight
             else:
@@ -360,15 +356,16 @@ class BeatMapper:
                 if pos + 1 < len(valid_indices):
                     next_time = features[valid_indices[pos + 1]]["time_ms"]
                     gap = next_time - time_ms
-
                     if gap >= self.min_hold_ms:
-                        end_time = time_ms + int(gap * 0.8)
-                        note_type = "hold"
+                        if np.random.random() < hold_chance:
+                            end_time = time_ms + int(gap * 0.8)
+                            note_type = "hold"
                 else:
                     duration = int(200 + (rms / rms_max) * 800)
                     if duration >= self.min_hold_ms:
-                        end_time = time_ms + duration
-                        note_type = "hold"
+                        if np.random.random() < hold_chance:
+                            end_time = time_ms + duration
+                            note_type = "hold"
 
             notes.append({
                 "time": time_ms,
