@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mustaff"
+version = "0.1.0"
+description = "自动从音频生成音游曲谱的工具"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Mustaff Developer"}
+]
+keywords = ["rhythm game", "beatmap", "audio analysis", "osu", "librosa"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+    "librosa>=0.10.0",
+    "numpy>=1.24.0",
+    "click>=8.0.0",
+    "soundfile>=0.12.0",
+    "matplotlib>=3.7.0",
+    "pygame>=2.5.0",
+]
+
+[project.optional-dependencies]
+gui = ["gradio>=4.0"]
+dev = ["pytest>=7.0", "black", "flake8"]
+
+[project.scripts]
+mustaff-cli = "mustaff.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ChidcGithub/Mustaff"
+Repository = "https://github.com/ChidcGithub/Mustaff"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mustaff*"]

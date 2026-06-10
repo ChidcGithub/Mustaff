@@ -1,0 +1,146 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: Mustaff-Windows
+            archive_ext: zip
+          - os: macos-latest
+            asset_name: Mustaff-macOS
+            archive_ext: zip
+          - os: ubuntu-latest
+            asset_name: Mustaff-Linux
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsndfile1 python3-tk
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build CLI
+        shell: bash
+        run: |
+          pyinstaller \
+            --onedir --console \
+            --name mustaff-cli \
+            --contents-directory _internal_cli \
+            --hidden-import pydoc \
+            --collect-data librosa \
+            --collect-data sklearn \
+            --collect-data matplotlib \
+            --collect-data soundfile \
+            --collect-data pygame \
+            --exclude-module torch \
+            --exclude-module torchvision \
+            --exclude-module torchaudio \
+            --exclude-module tensorflow \
+            --exclude-module tensorboard \
+            --exclude-module jax \
+            --exclude-module jaxlib \
+            --exclude-module flax \
+            --exclude-module pytest \
+            --exclude-module IPython \
+            --exclude-module jupyter \
+            --exclude-module notebook \
+            entry_cli.py
+
+      - name: Build GUI
+        shell: bash
+        run: |
+          pyinstaller \
+            --onedir --windowed \
+            --name mustaff-gui \
+            --contents-directory _internal_gui \
+            --hidden-import pydoc \
+            --collect-data librosa \
+            --collect-data sklearn \
+            --collect-data matplotlib \
+            --collect-data soundfile \
+            --collect-data pygame \
+            --exclude-module torch \
+            --exclude-module torchvision \
+            --exclude-module torchaudio \
+            --exclude-module tensorflow \
+            --exclude-module tensorboard \
+            --exclude-module jax \
+            --exclude-module jaxlib \
+            --exclude-module flax \
+            --exclude-module pytest \
+            --exclude-module IPython \
+            --exclude-module jupyter \
+            --exclude-module notebook \
+            entry_gui.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path ${{ matrix.asset_name }}
+          Copy-Item -Path dist\mustaff-cli\* -Destination ${{ matrix.asset_name }}\ -Recurse -Force
+          Copy-Item -Path dist\mustaff-gui\* -Destination ${{ matrix.asset_name }}\ -Recurse -Force
+          Compress-Archive -Path ${{ matrix.asset_name }}\* -DestinationPath ${{ matrix.asset_name }}.zip -Force
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ${{ matrix.asset_name }}
+          cp -r dist/mustaff-cli/* ${{ matrix.asset_name }}/
+          cp -r dist/mustaff-gui/* ${{ matrix.asset_name }}/
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            zip -r ${{ matrix.asset_name }}.zip ${{ matrix.asset_name }}
+          else
+            tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}.${{ matrix.archive_ext }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
