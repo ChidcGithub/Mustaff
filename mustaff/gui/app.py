@@ -240,7 +240,7 @@ class MustaffGUI:
 
     def _generate_worker(self, input_path: str, keys: int, density: float,
                          ln_threshold: float, fmt: str, difficulty: str, output_dir: str):
-        """后台线程执行生成任务，通过 queue 发送进度"""
+        """后台线程执行生成任务（分析阶段使用 analyzer 内置并行）"""
         def report(step: int, total: int, msg: str):
             self._progress_queue.put({"type": "progress", "step": step, "total": total, "msg": msg})
 
@@ -249,17 +249,11 @@ class MustaffGUI:
             analyzer = AudioAnalyzer()
             analyzer.load(input_path)
 
-            report(10, 100, "检测 Onset...")
-            analyzer._analyze_onset()
+            # 使用进度回调的分析
+            def on_progress(pct: int, msg: str):
+                report(pct, 100, msg)
 
-            report(25, 100, "检测 Beat...")
-            analyzer._analyze_beat()
-
-            report(40, 100, "提取音高...")
-            analyzer._analyze_pitch()
-
-            report(60, 100, "分析能量...")
-            analyzer._analyze_rms()
+            analyzer.analyze(progress_callback=on_progress)
 
             report(75, 100, "映射音符...")
             features = analyzer.get_note_features()
@@ -276,30 +270,31 @@ class MustaffGUI:
             artist = "Unknown Artist"
             exported = []
 
-            if fmt in ("osu", "both"):
-                osu_path = os.path.join(output_dir, f"{base_name}.osu")
-                OsuManiaExporter(
-                    notes=notes,
-                    bpm=analyzer.tempo,
-                    keys=keys,
-                    title=title,
-                    artist=artist,
-                    version=difficulty,
-                    audio_filename=os.path.basename(input_path),
-                ).export(osu_path)
-                exported.append(f"osu: {osu_path}")
+            # 并行导出多格式（I/O 密集，线程并行有效）
+            export_futs = []
+            from concurrent.futures import ThreadPoolExecutor
 
-            if fmt in ("json", "both"):
-                json_path = os.path.join(output_dir, f"{base_name}.json")
-                JsonExporter(
-                    notes=notes,
-                    bpm=analyzer.tempo,
-                    keys=keys,
-                    title=title,
-                    artist=artist,
-                    version=difficulty,
-                ).export(json_path)
-                exported.append(f"json: {json_path}")
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                if fmt in ("osu", "both"):
+                    _osu_exporter = OsuManiaExporter(
+                        notes=notes, bpm=analyzer.tempo, keys=keys,
+                        title=title, artist=artist, version=difficulty,
+                        audio_filename=os.path.basename(input_path),
+                    )
+                    _osu_path = os.path.join(output_dir, f"{base_name}.osu")
+                    export_futs.append(("osu", _osu_path, ex.submit(_osu_exporter.export, _osu_path)))
+
+                if fmt in ("json", "both"):
+                    _json_exporter = JsonExporter(
+                        notes=notes, bpm=analyzer.tempo, keys=keys,
+                        title=title, artist=artist, version=difficulty,
+                    )
+                    _json_path = os.path.join(output_dir, f"{base_name}.json")
+                    export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
+
+                for name, path, fut in export_futs:
+                    fut.result()
+                    exported.append(f"{name}: {path}")
 
             # 发送完成消息
             self._progress_queue.put({

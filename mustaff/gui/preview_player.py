@@ -476,8 +476,8 @@ class PreviewCanvas(tk.Canvas):
                 dt = (t - current_ms) / 1000.0  # 秒
                 return self.judge_line_y - dt * self.fall_speed
 
-            x0 = 20 + col * self.lane_width + 4
-            x1 = 20 + (col + 1) * self.lane_width - 4
+            x0 = self.lane_offset_x + col * self.lane_width + 4
+            x1 = self.lane_offset_x + (col + 1) * self.lane_width - 4
 
             if note_type == "hold" and end_time:
                 y_head = time_to_y(note_time)

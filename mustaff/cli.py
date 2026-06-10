@@ -5,13 +5,54 @@ Usage:
     mustaff-cli input.mp3 --output-dir ./maps --format osu --keys 4
 """
 
+from __future__ import annotations
+
 import os
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
+
 import click
 from .analyzer import AudioAnalyzer
 from .mapper import BeatMapper
 from .exporters.osu_mania import OsuManiaExporter
 from .exporters.json_exporter import JsonExporter
 from .preview import generate_preview
+
+
+class ProgressSpinner:
+    """简易进度动画"""
+
+    def __init__(self):
+        self._chars = "|/-\\"  # ASCII-safe for Windows console
+        self._idx = 0
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._current_msg = ""
+
+    def start(self, msg: str = ""):
+        self._current_msg = msg
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def _spin(self):
+        while self._running:
+            ch = self._chars[self._idx % len(self._chars)]
+            click.echo(f"\r{ch} {self._current_msg}", nl=False)
+            self._idx += 1
+            time.sleep(0.08)
+
+    def update(self, msg: str):
+        self._current_msg = msg
+
+    def stop(self, msg: str = ""):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=0.5)
+        spaces = " " * (len(self._current_msg) + 2)
+        click.echo(f"\r{spaces}\r{msg}", nl=False)
 
 
 @click.command()
@@ -89,18 +130,23 @@ def main(
     if title is None:
         title = os.path.splitext(os.path.basename(input_file))[0]
 
-    click.echo(f"[Mustaff] 正在分析音频: {input_file}")
+    spinner = ProgressSpinner()
+    spinner.start("加载音频...")
 
-    # 分析音频
+    t0 = time.time()
     analyzer = AudioAnalyzer(sr=sr)
     analyzer.load(input_file)
-    analyzer.analyze()
 
-    click.echo(f"   检测到 BPM: {analyzer.tempo:.1f}")
-    click.echo(f"   检测到 Onset 数: {len(analyzer.onset_times)}")
-    click.echo(f"   音频时长: {analyzer.duration:.2f}s")
+    def on_progress(pct: int, msg: str):
+        spinner.update(msg)
 
-    # 获取特征并映射
+    spinner.update("分析中...")
+    analyzer.analyze(progress_callback=on_progress)
+
+    t_analyze = time.time() - t0
+    spinner.stop(f"  BPM: {analyzer.tempo:.1f}  Onset: {len(analyzer.onset_times)}  ({t_analyze:.1f}s)")
+
+    # 映射音符
     features = analyzer.get_note_features()
     mapper = BeatMapper(
         keys=keys,
@@ -109,58 +155,69 @@ def main(
     )
     notes = mapper.map_notes(features)
 
-    click.echo(f"   生成音符数: {len(notes)}")
+    click.echo(f"  音符数: {len(notes)}")
 
-    # 确保输出目录存在
+    # 确保输出目录
     os.makedirs(output_dir, exist_ok=True)
-
     base_name = os.path.splitext(os.path.basename(input_file))[0]
-    exported = []
 
+    # 并行导出多格式（I/O 密集，线程并行有效）
+    export_tasks = []
     if format in ("osu", "both"):
         osu_path = os.path.join(output_dir, f"{base_name}.osu")
-        exporter = OsuManiaExporter(
-            notes=notes,
-            bpm=analyzer.tempo,
-            offset=0.0,
-            keys=keys,
-            title=title,
-            artist=artist,
-            version=difficulty,
-            audio_filename=os.path.basename(input_file),
-        )
-        exporter.export(osu_path)
-        exported.append(osu_path)
-        click.echo(f"[OK] 已导出 osu!mania 谱面: {osu_path}")
+        export_tasks.append(("osu", osu_path, lambda p=osu_path: _export_osu(
+            notes=notes, bpm=analyzer.tempo, keys=keys,
+            title=title, artist=artist, version=difficulty,
+            audio_filename=os.path.basename(input_file), path=p,
+        )))
 
     if format in ("json", "both"):
         json_path = os.path.join(output_dir, f"{base_name}.json")
-        exporter = JsonExporter(
-            notes=notes,
-            bpm=analyzer.tempo,
-            offset=0.0,
-            keys=keys,
-            title=title,
-            artist=artist,
-            version=difficulty,
-        )
-        exporter.export(json_path)
-        exported.append(json_path)
-        click.echo(f"[OK] 已导出 JSON 谱面: {json_path}")
+        export_tasks.append(("json", json_path, lambda p=json_path: _export_json(
+            notes=notes, bpm=analyzer.tempo, keys=keys,
+            title=title, artist=artist, version=difficulty, path=p,
+        )))
 
-    # 生成预览图
+    if len(export_tasks) > 1:
+        spinner.update("并行导出...")
+        with ThreadPoolExecutor(max_workers=len(export_tasks)) as ex:
+            fut_map = {ex.submit(task): name for name, _, task in export_tasks}
+            for fut in as_completed(fut_map):
+                fut.result()
+                click.echo(f"[OK] 已导出 {fut_map[fut]} 谱面")
+    else:
+        for name, path, task in export_tasks:
+            task()
+            click.echo(f"[OK] 已导出 {name} 谱面: {path}")
+
+    # 预览图
     if preview:
+        spinner.update("生成预览图...")
         preview_path = os.path.join(output_dir, f"{base_name}.png")
         generate_preview(
-            notes=notes,
-            keys=keys,
+            notes=notes, keys=keys,
             duration_ms=int(analyzer.duration * 1000),
             title=f"{title} [{keys}K]",
             save_path=preview_path,
         )
         click.echo(f"[OK] 已导出预览图: {preview_path}")
 
-    click.echo("\n[Done] 完成！")
+    click.echo(f"\n[Done] 总耗时: {time.time() - t0:.1f}s")
+
+
+def _export_osu(notes, bpm, keys, title, artist, version, audio_filename, path):
+    OsuManiaExporter(
+        notes=notes, bpm=bpm, offset=0.0, keys=keys,
+        title=title, artist=artist, version=version,
+        audio_filename=audio_filename,
+    ).export(path)
+
+
+def _export_json(notes, bpm, keys, title, artist, version, path):
+    JsonExporter(
+        notes=notes, bpm=bpm, offset=0.0, keys=keys,
+        title=title, artist=artist, version=version,
+    ).export(path)
 
 
 if __name__ == "__main__":

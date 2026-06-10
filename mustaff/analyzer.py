@@ -8,9 +8,14 @@
 - 节拍 (Beat)
 """
 
-from typing import List, Tuple, Optional
+from __future__ import annotations
+
+from typing import Callable, List, Tuple, Optional
 import numpy as np
 import librosa
+
+
+ProgressCallback = Callable[[int, str], None]
 
 
 class AudioAnalyzer:
@@ -75,8 +80,14 @@ class AudioAnalyzer:
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         return self
 
-    def analyze(self) -> "AudioAnalyzer":
+    def analyze(
+        self,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> "AudioAnalyzer":
         """执行全部分析流程
+
+        Args:
+            progress_callback: 进度回调函数 callback(percent, message)
 
         Returns:
             self，方便链式调用
@@ -84,15 +95,29 @@ class AudioAnalyzer:
         if self.y is None:
             raise RuntimeError("请先调用 load() 或 load_array() 加载音频")
 
+        if progress_callback:
+            progress_callback(5, "检测 Onset...")
         self._analyze_onset()
+
+        if progress_callback:
+            progress_callback(20, "检测 Beat...")
         self._analyze_beat()
+
+        if progress_callback:
+            progress_callback(35, "提取音高...")
         self._analyze_pitch()
+
+        if progress_callback:
+            progress_callback(75, "分析能量...")
         self._analyze_rms()
+
+        if progress_callback:
+            progress_callback(85, "分析完成")
+
         return self
 
     def _analyze_onset(self) -> None:
         """提取 onset（音符起始点）"""
-        # 使用 librosa 的 onset 检测
         self.onset_frames = librosa.onset.onset_detect(
             y=self.y,
             sr=self.sr,
