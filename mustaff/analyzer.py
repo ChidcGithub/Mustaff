@@ -5,6 +5,10 @@ import numpy as np
 import librosa
 
 
+def _scalar(x):
+    return x.item() if hasattr(x, 'item') else x
+
+
 ProgressCallback = Callable[[int, str], None]
 
 
@@ -177,7 +181,8 @@ class AudioAnalyzer:
         tempo, self.beat_frames = librosa.beat.beat_track(
             y=self.y, sr=self.sr, hop_length=self.hop_length,
         )
-        self.tempo = float(tempo) if tempo and tempo > 0 else 120.0
+        t = _scalar(tempo)
+        self.tempo = t if t > 0 else 120.0
         self.beat_times = librosa.frames_to_time(
             self.beat_frames, sr=self.sr, hop_length=self.hop_length
         )
@@ -225,7 +230,7 @@ class AudioAnalyzer:
 
         for i, frame in enumerate(self.onset_frames):
             time_s = librosa.frames_to_time(frame, sr=self.sr, hop_length=self.hop_length)
-            time_ms = int(round(time_s * 1000))
+            time_ms = int(round(_scalar(time_s) * 1000))
 
             pitch_hz = None
             pitch_midi = None
@@ -233,17 +238,17 @@ class AudioAnalyzer:
             if self.pitches is not None and 0 <= frame < len(self.pitches):
                 p = self.pitches[frame]
                 if not np.isnan(p) and p > 0:
-                    pitch_hz = float(p)
-                    pitch_midi = float(librosa.hz_to_midi(p))
-                    confidence = float(self.pitch_confidences[frame]) if self.pitch_confidences is not None else 0.0
+                    pitch_hz = _scalar(p)
+                    pitch_midi = _scalar(librosa.hz_to_midi(p))
+                    confidence = _scalar(self.pitch_confidences[frame]) if self.pitch_confidences is not None else 0.0
 
             rms_val = 0.0
             if self.rms is not None and 0 <= frame < len(self.rms):
-                rms_val = float(self.rms[frame])
+                rms_val = _scalar(self.rms[frame])
 
             near_beat = frame in beat_set
-            onset_strength = float(self.onset_strengths[i]) if self.onset_strengths is not None and i < len(self.onset_strengths) else 0.0
-            band = int(self.onset_bands[i]) if self.onset_bands is not None and i < len(self.onset_bands) else 0
+            onset_strength = _scalar(self.onset_strengths[i]) if self.onset_strengths is not None and i < len(self.onset_strengths) else 0.0
+            band = _scalar(self.onset_bands[i]) if self.onset_bands is not None and i < len(self.onset_bands) else 0
 
             results.append({
                 "time_ms": time_ms,
