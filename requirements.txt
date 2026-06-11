@@ -5,3 +5,4 @@ soundfile>=0.12.0
 matplotlib>=3.7.0
 pygame>=2.5.0
 sv-ttk>=2.6.0
+comtypes>=1.4.0

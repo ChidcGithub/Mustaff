@@ -35,6 +35,8 @@ from ..analyzer import AudioAnalyzer
 from ..mapper import BeatMapper
 from ..exporters.osu_mania import OsuManiaExporter
 from ..exporters.json_exporter import JsonExporter
+from ..importers.json_importer import JsonImporter
+from ..importers.osu_importer import OsuImporter
 from ..colors import lane_colors
 from .preview_player import PreviewCanvas, AudioPlayer
 
@@ -65,10 +67,16 @@ class MustaffGUI:
         self.current_duration_ms: float = 0.0
         self.current_title: str = ""
         self.current_audio_path: Optional[str] = None
+        self.current_bpm: float = 0.0
+        self.current_artist: str = "Unknown Artist"
+        self.output_dir: str = os.getcwd()
         self._preview_mode = False
         self._audio_player: Optional[AudioPlayer] = None
         self._progress_queue: queue.Queue = queue.Queue()
         self._worker_thread: Optional[threading.Thread] = None
+        self._taskbar = None
+        self._hwnd = None
+        self._init_taskbar()
 
         self._build_ui()
 
@@ -97,6 +105,130 @@ class MustaffGUI:
         if scale > 1.25:
             self.root.tk.call("tk", "scaling", dpi / 72.0)
         return scale
+
+    def _init_taskbar(self):
+        """初始化 Windows 任务栏进度条 (ITaskbarList3 via comtypes)"""
+        import sys
+        if sys.platform != "win32":
+            return
+        self._taskbar = None
+        self._hwnd = self.root.winfo_id()
+        self._TBPF_NORMAL = 0x2
+        self._TBPF_NOPROGRESS = 0x0
+        try:
+            import comtypes
+            import comtypes.client
+            from comtypes import GUID, COMMETHOD, HRESULT
+            from ctypes.wintypes import HWND
+
+            class ITaskbarList3(comtypes.IUnknown):
+                _iid_ = GUID("{EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}")
+                _methods_ = [
+                    COMMETHOD([], HRESULT, "HrInit"),
+                    COMMETHOD([], HRESULT, "AddTab", (["in"], HWND, "hwnd")),
+                    COMMETHOD([], HRESULT, "DeleteTab", (["in"], HWND, "hwnd")),
+                    COMMETHOD([], HRESULT, "ActivateTab", (["in"], HWND, "hwnd")),
+                    COMMETHOD([], HRESULT, "SetActiveAlt", (["in"], HWND, "hwnd")),
+                    COMMETHOD([], HRESULT, "MarkFullscreenWindow",
+                              (["in"], HWND, "hwnd"), (["in"], comtypes.c_int, "fFullscreen")),
+                    COMMETHOD([], HRESULT, "SetProgressValue",
+                              (["in"], HWND, "hwnd"),
+                              (["in"], ctypes.c_ulonglong, "ullCompleted"),
+                              (["in"], ctypes.c_ulonglong, "ullTotal")),
+                    COMMETHOD([], HRESULT, "SetProgressState",
+                              (["in"], HWND, "hwnd"),
+                              (["in"], comtypes.c_int, "tbpFlags")),
+                ]
+
+            self._taskbar = comtypes.client.CreateObject(
+                "{56FDF344-FD6D-11d0-958A-006097C9A090}", interface=ITaskbarList3)
+            self._taskbar.HrInit()
+        except Exception:
+            self._taskbar = None
+
+    def _set_taskbar_progress(self, pct: int):
+        """更新 Windows 任务栏进度条"""
+        if not self._taskbar:
+            return
+        try:
+            self._taskbar.SetProgressState(self._hwnd, self._TBPF_NORMAL)
+            self._taskbar.SetProgressValue(self._hwnd, pct, 100)
+        except Exception:
+            pass
+
+    def _clear_taskbar(self):
+        """清除 Windows 任务栏进度条"""
+        if not self._taskbar:
+            return
+        try:
+            self._taskbar.SetProgressState(self._hwnd, self._TBPF_NOPROGRESS)
+        except Exception:
+            pass
+
+    def _show_toast(self, title: str, msg: str):
+        """显示 Windows 气泡通知"""
+        import sys
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            NIM_ADD = 0x0
+            NIM_MODIFY = 0x1
+            NIM_DELETE = 0x2
+            NIF_INFO = 0x10
+            NIF_ICON = 0x2
+            NIF_MESSAGE = 0x1
+
+            class NOTIFYICONDATAW(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("hWnd", wintypes.HWND),
+                    ("uID", wintypes.UINT),
+                    ("uFlags", wintypes.UINT),
+                    ("uCallbackMessage", wintypes.UINT),
+                    ("hIcon", wintypes.HICON),
+                    ("szTip", ctypes.c_wchar * 128),
+                    ("dwState", wintypes.DWORD),
+                    ("dwStateMask", wintypes.DWORD),
+                    ("szInfo", ctypes.c_wchar * 256),
+                    ("uTimeoutOrVersion", wintypes.UINT),
+                    ("szInfoTitle", ctypes.c_wchar * 64),
+                    ("dwInfoFlags", wintypes.DWORD),
+                    ("guidItem", ctypes.c_wchar * 39),
+                    ("hBalloonIcon", wintypes.HICON),
+                ]
+
+            shell32 = ctypes.windll.shell32
+            user32 = ctypes.windll.user32
+
+            nid = NOTIFYICONDATAW()
+            nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+            nid.hWnd = self._hwnd
+            nid.uID = 1
+            nid.uFlags = NIF_ICON | NIF_MESSAGE
+            nid.uCallbackMessage = 0x400
+            nid.hIcon = user32.LoadIconW(None, 1)
+            nid.szTip = "Mustaff"
+            shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
+
+            nid.uFlags = NIF_INFO
+            nid.szInfo = msg
+            nid.szInfoTitle = title
+            nid.dwInfoFlags = 0x1
+            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+
+            def remove_icon():
+                import time
+                time.sleep(5)
+                try:
+                    shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+                except Exception:
+                    pass
+            threading.Thread(target=remove_icon, daemon=True).start()
+        except Exception:
+            pass
 
     def _build_ui(self):
         s = self._scale
@@ -139,6 +271,12 @@ class MustaffGUI:
         self.file_label.pack(side="left", fill="x", expand=True)
         ttk.Button(file_frame, text="浏览...", command=self._browse_file).pack(side="right")
 
+        import_frame = ttk.LabelFrame(inner, text="导入谱面", padding=int(10*s))
+        import_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        self.import_label = ttk.Label(import_frame, text="未导入谱面", foreground="gray")
+        self.import_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(import_frame, text="导入...", command=self._import_chart).pack(side="right")
+
         param_frame = ttk.LabelFrame(inner, text="谱面参数", padding=int(10*s))
         param_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
 
@@ -158,11 +296,6 @@ class MustaffGUI:
         ttk.Label(param_frame, text="长按阈值 (0-1):").grid(row=3, column=0, sticky="w", pady=int(3*s))
         self.ln_var = tk.DoubleVar(value=0.7)
         ttk.Spinbox(param_frame, from_=0.0, to=1.0, increment=0.05, textvariable=self.ln_var, width=10).grid(row=3, column=1, sticky="w", pady=int(3*s))
-
-        ttk.Label(param_frame, text="输出格式:").grid(row=4, column=0, sticky="w", pady=int(3*s))
-        self.format_var = tk.StringVar(value="both")
-        fmt_combo = ttk.Combobox(param_frame, textvariable=self.format_var, values=["osu", "json", "both"], width=10, state="readonly")
-        fmt_combo.grid(row=4, column=1, sticky="w", pady=int(3*s))
 
         # ===== 高级选项 =====
         adv_frame = ttk.LabelFrame(inner, text="高级选项", padding=int(10*s))
@@ -229,7 +362,6 @@ class MustaffGUI:
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self.out_label = ttk.Label(out_frame, text=os.getcwd(), foreground="gray")
         self.out_label.pack(side="left", fill="x", expand=True)
-        self.output_dir = os.getcwd()
         ttk.Button(out_frame, text="更改...", command=self._browse_out).pack(side="right")
 
         prog_frame = ttk.LabelFrame(inner, text="进度", padding=int(5*s))
@@ -250,9 +382,16 @@ class MustaffGUI:
         self.back_btn = ttk.Button(btn_frame, text="← 返回静态预览", command=self._switch_to_static, state="disabled")
         self.back_btn.pack(fill="x", pady=int(2*s))
 
+        export_row = ttk.Frame(btn_frame)
+        export_row.pack(fill="x", pady=int(2*s))
+        self.format_var = tk.StringVar(value="both")
+        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "both"], width=6, state="readonly").pack(side="left")
+        self.export_btn = ttk.Button(export_row, text="导出", command=self._export, state="disabled")
+        self.export_btn.pack(side="right", fill="x", expand=True, padx=(int(4*s), 0))
+
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.3.0", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.3.2", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
@@ -350,6 +489,72 @@ class MustaffGUI:
             self.output_dir = path
             self.out_label.config(text=path)
 
+    def _import_chart(self):
+        path = filedialog.askopenfilename(
+            title="导入谱面文件",
+            filetypes=[
+                ("谱面文件", "*.json *.osu"),
+                ("JSON", "*.json"),
+                ("OSU", "*.osu"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".json":
+                importer = JsonImporter(path)
+            elif ext == ".osu":
+                importer = OsuImporter(path)
+            else:
+                messagebox.showerror("错误", f"不支持的文件格式: {ext}")
+                return
+
+            info = importer.get_info()
+            if not info["notes"]:
+                messagebox.showwarning("提示", "谱面中没有音符")
+                return
+
+            self.current_notes = info["notes"]
+            self.current_keys = info["keys"]
+            self.current_bpm = info["bpm"]
+            self.current_title = info["title"]
+            self.current_artist = info["artist"]
+            self.current_duration_ms = max(n["time"] for n in info["notes"]) + 2000
+
+            self.keys_var.set(info["keys"])
+            self.diff_var.set(info["version"])
+            self.import_label.config(text=os.path.basename(path), foreground="black")
+            self._log(f"导入谱面: {path}")
+            self._log(f"  标题: {info['title']} - {info['artist']}")
+            self._log(f"  BPM: {info['bpm']}, Keys: {info['keys']}, 音符数: {len(info['notes'])}")
+
+            # 选择配对音频文件（可选）
+            audio_path = filedialog.askopenfilename(
+                title="选择配对音频文件（可选，用于播放预览）",
+                filetypes=[
+                    ("音频文件", "*.mp3 *.wav *.flac *.ogg *.m4a"),
+                    ("所有文件", "*.*"),
+                ],
+            )
+            if audio_path:
+                self.input_path = audio_path
+                self.current_audio_path = audio_path
+                self.file_label.config(text=os.path.basename(audio_path), foreground="black")
+                self._log(f"配对音频: {audio_path}")
+
+            self.preview_btn.config(state="normal")
+            self.play_preview_btn.config(state="normal")
+            self.export_btn.config(state="normal")
+            self._draw_preview()
+            self._log("[Done] 谱面导入完成！")
+
+        except Exception as e:
+            messagebox.showerror("导入失败", str(e))
+            self._log(f"[Error] 导入失败: {e}")
+
     def _generate(self):
         if not self.input_path:
             messagebox.showwarning("提示", "请先选择一个音频文件")
@@ -364,8 +569,10 @@ class MustaffGUI:
         self.gen_btn.config(state="disabled")
         self.preview_btn.config(state="disabled")
         self.play_preview_btn.config(state="disabled")
+        self.export_btn.config(state="disabled")
         self._log("=" * 40)
         self._log("开始分析...")
+        self._set_taskbar_progress(0)
 
         # 清空队列
         while not self._progress_queue.empty():
@@ -382,9 +589,7 @@ class MustaffGUI:
                 self.keys_var.get(),
                 self.density_var.get(),
                 self.ln_var.get(),
-                self.format_var.get(),
                 self.diff_var.get(),
-                self.output_dir,
                 self.onset_sens_var.get(),
                 self.backtrack_var.get(),
                 self.multi_band_var.get(),
@@ -401,7 +606,7 @@ class MustaffGUI:
         self._poll_progress()
 
     def _generate_worker(self, input_path: str, keys: int, density: float,
-                         ln_threshold: float, fmt: str, difficulty: str, output_dir: str,
+                         ln_threshold: float, difficulty: str,
                          onset_sensitivity: float = 0.5, backtrack: bool = False,
                          multi_band: bool = False, snap_to_beat: bool = False,
                          snap_resolution: int = 8, min_bpm: float = 50.0,
@@ -448,37 +653,8 @@ class MustaffGUI:
                 rms_full=analyzer.rms, pitches_full=analyzer.pitches,
             )
 
-            report(85, 100, "导出文件...")
+            report(100, 100, "生成完成")
             base_name = os.path.splitext(os.path.basename(input_path))[0]
-            title = base_name
-            artist = "Unknown Artist"
-            exported = []
-
-            # 并行导出多格式（I/O 密集，线程并行有效）
-            export_futs = []
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                if fmt in ("osu", "both"):
-                    _osu_exporter = OsuManiaExporter(
-                        notes=notes, bpm=analyzer.tempo, keys=keys,
-                        title=title, artist=artist, version=difficulty,
-                        audio_filename=os.path.basename(input_path),
-                    )
-                    _osu_path = os.path.join(output_dir, f"{base_name}.osu")
-                    export_futs.append(("osu", _osu_path, ex.submit(_osu_exporter.export, _osu_path)))
-
-                if fmt in ("json", "both"):
-                    _json_exporter = JsonExporter(
-                        notes=notes, bpm=analyzer.tempo, keys=keys,
-                        title=title, artist=artist, version=difficulty,
-                    )
-                    _json_path = os.path.join(output_dir, f"{base_name}.json")
-                    export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
-
-                for name, path, fut in export_futs:
-                    fut.result()
-                    exported.append(f"{name}: {path}")
 
             # 发送完成消息
             self._progress_queue.put({
@@ -492,7 +668,6 @@ class MustaffGUI:
                 "onset_count": len(analyzer.onset_times) if analyzer.onset_times is not None else 0,
                 "duration_sec": analyzer.duration,
                 "note_count": len(notes),
-                "exported": exported,
             })
 
         except Exception as e:
@@ -508,6 +683,7 @@ class MustaffGUI:
                     self._progress_bar["value"] = pct
                     self._status_label.config(text=item["msg"], foreground="black")
                     self._log(f"[{pct}%] {item['msg']}")
+                    self._set_taskbar_progress(pct)
                 elif item["type"] == "done":
                     self._progress_bar["value"] = 100
                     self._status_label.config(text="生成完成！", foreground="green")
@@ -518,26 +694,30 @@ class MustaffGUI:
                     self.current_duration_ms = item["duration_ms"]
                     self.current_title = item["title"]
                     self.current_audio_path = item["audio_path"]
+                    self.current_bpm = item["bpm"]
 
                     # 日志
                     self._log(f"BPM: {item['bpm']:.1f}")
                     self._log(f"Onset 数: {item['onset_count']}")
                     self._log(f"时长: {item['duration_sec']:.2f}s")
                     self._log(f"生成音符数: {item['note_count']}")
-                    for exp in item["exported"]:
-                        self._log(f"导出 {exp}")
 
                     # 显示静态预览
                     self._draw_preview()
                     self.gen_btn.config(state="normal")
                     self.preview_btn.config(state="normal")
                     self.play_preview_btn.config(state="normal")
+                    self.export_btn.config(state="normal")
+                    self._clear_taskbar()
+                    self._show_toast("Mustaff", f"生成完成！{item['note_count']} 个音符")
                     self._log("[Done] 生成完成！")
                     return  # 停止轮询
                 elif item["type"] == "error":
                     self._progress_bar["value"] = 0
                     self._status_label.config(text="生成失败", foreground="red")
                     self._log(f"[Error] {item['msg']}")
+                    self._clear_taskbar()
+                    self._show_toast("Mustaff", f"生成失败：{item['msg']}")
                     messagebox.showerror("错误", item["msg"])
                     self.gen_btn.config(state="normal")
                     return
@@ -552,6 +732,67 @@ class MustaffGUI:
             messagebox.showinfo("提示", "请先生成谱面")
             return
         self._draw_preview()
+
+    def _export(self):
+        if not self.current_notes:
+            messagebox.showinfo("提示", "请先生成谱面")
+            return
+
+        fmt = self.format_var.get()
+        base_name = self.current_title
+        difficulty = self.diff_var.get()
+        audio_basename = os.path.basename(self.current_audio_path) if self.current_audio_path else ""
+        exported = []
+
+        self.export_btn.config(state="disabled")
+        self._log("导出中...")
+
+        def do_export():
+            nonlocal exported
+            from concurrent.futures import ThreadPoolExecutor
+            export_futs = []
+
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                if fmt in ("osu", "both"):
+                    _osu_exporter = OsuManiaExporter(
+                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        title=base_name, artist=self.current_artist, version=difficulty,
+                        audio_filename=audio_basename,
+                    )
+                    _osu_path = os.path.join(self.output_dir, f"{base_name}.osu")
+                    export_futs.append(("osu", _osu_path, ex.submit(_osu_exporter.export, _osu_path)))
+
+                if fmt in ("json", "both"):
+                    _json_exporter = JsonExporter(
+                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        title=base_name, artist=self.current_artist, version=difficulty,
+                    )
+                    _json_path = os.path.join(self.output_dir, f"{base_name}.json")
+                    export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
+
+                for name, path, fut in export_futs:
+                    fut.result()
+                    exported.append(f"{name}: {path}")
+
+            self.root.after(0, _on_done)
+
+        def _on_done():
+            for exp in exported:
+                self._log(f"导出 {exp}")
+            self._log("[Done] 导出完成！")
+            self.export_btn.config(state="normal")
+
+        def _on_error(e):
+            self._log(f"[Error] 导出失败: {e}")
+            self.export_btn.config(state="normal")
+
+        def run_export():
+            try:
+                do_export()
+            except Exception as e:
+                self.root.after(0, lambda: _on_error(e))
+
+        threading.Thread(target=run_export, daemon=True).start()
 
     def _draw_preview(self):
         self.ax.clear()

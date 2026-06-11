@@ -13,7 +13,7 @@ from tkinter import ttk
 from typing import List, Dict, Any, Optional, Set
 import os
 import bisect
-from ..colors import lane_colors as get_lane_colors
+from ..colors import lane_colors as get_lane_colors, lighten_color
 
 # pygame 用于音频播放
 try:
@@ -178,6 +178,10 @@ class PreviewCanvas(tk.Canvas):
 
         self._sorted_times = sorted(n["time"] for n in notes)
         self._note_indices_by_time = sorted(range(len(notes)), key=lambda i: notes[i]["time"])
+        self._max_hold_duration_ms = max(
+            (n.get("end_time", n["time"]) - n["time"] for n in notes if n.get("type") == "hold" and n.get("end_time")),
+            default=0.0
+        )
 
         self.lane_width = int(70 * scale)
         self.fall_speed = int(350 * scale)
@@ -435,6 +439,8 @@ class PreviewCanvas(tk.Canvas):
             self.delete(item)
         self._effect_items.clear()
 
+        self.delete("mask")
+
         self._update_time_text(current_ms)
         self._update_timeline(current_ms)
 
@@ -444,7 +450,9 @@ class PreviewCanvas(tk.Canvas):
         lane_colors = get_lane_colors(self.keys)
         playing = self.player is not None and not self.player._paused
 
-        start_idx = bisect.bisect_left(self._sorted_times, view_top_ms)
+        # 扩展起始索引以包含 body 仍在可见区域的长 hold
+        adjusted_top = view_top_ms - self._max_hold_duration_ms
+        start_idx = bisect.bisect_left(self._sorted_times, adjusted_top)
         end_idx = bisect.bisect_right(self._sorted_times, view_bottom_ms)
 
         for pos in range(start_idx, end_idx):
@@ -488,15 +496,16 @@ class PreviewCanvas(tk.Canvas):
                 self._note_items.append(item)
                 item = self.create_rectangle(
                     x0, y_head - int(4*s), x1, y_head + int(4*s),
-                    fill=note_color, outline="white", width=max(1, int(1*s))
+                    fill=note_color, outline=lighten_color(note_color, 0.3), width=max(1, int(1*s))
                 )
                 self._note_items.append(item)
             else:
                 y = time_to_y(note_time)
                 if int(-20*s) <= y <= self.canvas_height + int(20*s):
+                    outline_color = lighten_color(note_color, 0.3)
                     item = self.create_rectangle(
                         x0 + int(8*s), y - int(6*s), x1 - int(8*s), y + int(6*s),
-                        fill=note_color, outline="white", width=max(1, int(2*s))
+                        fill=note_color, outline=outline_color, width=max(1, int(1*s))
                     )
                     self._note_items.append(item)
 
@@ -514,6 +523,18 @@ class PreviewCanvas(tk.Canvas):
                     if current_ms >= end_time and current_ms <= end_time + 80:
                         self._hit_set.add(hold_end_key)
                         self._spawn_hit_effect(col, is_hold_end=True)
+
+        # 判定线下方遮罩
+        s = self._scale
+        mask_bottom = self.canvas_height
+        if self.judge_line_y < mask_bottom:
+            self.create_rectangle(
+                self.lane_offset_x, self.judge_line_y,
+                self.lane_offset_x + self.keys * self.lane_width, mask_bottom,
+                fill=self.BG_COLOR, outline="", tags="mask"
+            )
+            self.tag_raise("timeline")
+            self.tag_raise("btn")
 
         self._update_hit_effects()
 
@@ -541,18 +562,27 @@ class PreviewCanvas(tk.Canvas):
         base_color = lane_colors[col % len(lane_colors)]
         color = base_color if not is_hold_end else "#ffffff"
         s = self._scale
-        base_size = self.lane_width // 2 + int(5*s)
 
-        for offset in range(3):
-            self._hit_effects.append({
-                "cx": cx,
-                "cy": cy,
-                "size": base_size + offset * int(8*s),
-                "alpha": 0.9 - offset * 0.2,
-                "alpha_speed": 0.07 + offset * 0.02,
-                "expand_speed": int(3*s) + offset * int(1.5*s),
-                "color": color,
-            })
+        # 外圈扩散环
+        self._hit_effects.append({
+            "cx": cx, "cy": cy,
+            "size": self.lane_width // 4,
+            "alpha": 0.8,
+            "alpha_speed": 0.06,
+            "expand_speed": int(4*s),
+            "color": color,
+            "ring": True,
+        })
+        # 内圈闪光
+        self._hit_effects.append({
+            "cx": cx, "cy": cy,
+            "size": int(6*s),
+            "alpha": 1.0,
+            "alpha_speed": 0.15,
+            "expand_speed": int(1*s),
+            "color": "#ffffff",
+            "ring": False,
+        })
 
     def _update_hit_effects(self):
         new_effects = []
@@ -564,22 +594,25 @@ class PreviewCanvas(tk.Canvas):
                 continue
             new_effects.append(eff)
 
-            width = max(1, int((2 + eff["alpha"] * 4) * s))
-            item = self.create_oval(
-                eff["cx"] - eff["size"], eff["cy"] - eff["size"] // 2,
-                eff["cx"] + eff["size"], eff["cy"] + eff["size"] // 2,
-                outline=eff["color"], width=width,
-            )
-            self._effect_items.append(item)
-
-            inner_size = eff["size"] * 0.6
-            if inner_size > int(6*s):
+            if eff["ring"]:
+                # 外圈：扩散圆环
+                width = max(1, int(3 * eff["alpha"] * s))
                 item = self.create_oval(
-                    eff["cx"] - inner_size, eff["cy"] - inner_size // 2,
-                    eff["cx"] + inner_size, eff["cy"] + inner_size // 2,
-                    outline=eff["color"], width=max(1, width - 1),
+                    eff["cx"] - eff["size"], eff["cy"] - eff["size"],
+                    eff["cx"] + eff["size"], eff["cy"] + eff["size"],
+                    outline=eff["color"], width=width,
                 )
                 self._effect_items.append(item)
+            else:
+                # 内圈：实心闪点
+                r = int(eff["size"] * eff["alpha"])
+                if r > 0:
+                    item = self.create_oval(
+                        eff["cx"] - r, eff["cy"] - r,
+                        eff["cx"] + r, eff["cy"] + r,
+                        fill=eff["color"], outline="",
+                    )
+                    self._effect_items.append(item)
 
         self._hit_effects = new_effects
 
@@ -591,6 +624,10 @@ class PreviewCanvas(tk.Canvas):
         self.duration_ms = duration_ms
         self._sorted_times = sorted(n["time"] for n in notes)
         self._note_indices_by_time = sorted(range(len(notes)), key=lambda i: notes[i]["time"])
+        self._max_hold_duration_ms = max(
+            (n.get("end_time", n["time"]) - n["time"] for n in notes if n.get("type") == "hold" and n.get("end_time")),
+            default=0.0
+        )
         self._hit_set.clear()
         self._hit_effects.clear()
 
