@@ -47,6 +47,20 @@ try:
 except ImportError:
     pygame = None
 
+# DPI awareness — 必须在 tk.Tk() 创建前设置
+if os.name == "nt":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
 
 class MustaffGUI:
     """Mustaff 主窗口"""
