@@ -473,7 +473,23 @@ class BeatMapper:
                             p_slice = pitches_full[f_start:f_end] if pitches_full is not None else None
                             score = self._calc_sustain_score(rms_slice, p_slice, rms_global_max)
                             if score >= sustain_threshold:
-                                end_time = time_ms + int(gap * 0.8)
+                                best_gap = gap
+                                for k in range(2, len(valid_indices) - pos):
+                                    far_feat = features[valid_indices[pos + k]]
+                                    far_gap = far_feat["time_ms"] - time_ms
+                                    if far_gap < best_gap + self.min_hold_ms:
+                                        continue
+                                    far_end = int(far_feat["frame"])
+                                    if far_end <= f_start:
+                                        continue
+                                    rms_slice_far = rms_full[f_start:far_end]
+                                    p_slice_far = pitches_full[f_start:far_end] if pitches_full is not None else None
+                                    score_far = self._calc_sustain_score(rms_slice_far, p_slice_far, rms_global_max)
+                                    if score_far >= sustain_threshold:
+                                        best_gap = far_gap
+                                    else:
+                                        break
+                                end_time = time_ms + int(best_gap * 0.8)
                                 note_type = "hold"
                 elif pos + 1 < len(valid_indices):
                     next_time = features[valid_indices[pos + 1]]["time_ms"]

@@ -85,7 +85,7 @@ class AudioAnalyzer:
         if progress_callback:
             progress_callback(5, "分析中... (并行提取特征)")
 
-        n_workers = os.cpu_count() or 4
+        n_workers = max(1, (os.cpu_count() or 4) - 1)
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
@@ -174,7 +174,7 @@ class AudioAnalyzer:
             )
             return band_idx, frames
 
-        n_workers = min(os.cpu_count() or 4, len(bands))
+        n_workers = min(max(1, (os.cpu_count() or 4) - 1), len(bands))
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = [pool.submit(_detect_band, i, lo, hi) for i, (_, lo, hi) in enumerate(bands)]
             all_onset_frames = []
