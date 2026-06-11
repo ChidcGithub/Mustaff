@@ -182,6 +182,9 @@ class PreviewCanvas(tk.Canvas):
             (n.get("end_time", n["time"]) - n["time"] for n in notes if n.get("type") == "hold" and n.get("end_time")),
             default=0.0
         )
+        self._min_note_speed = min(
+            (n.get("speed", 10.0) for n in notes), default=10.0
+        ) if notes else 10.0
 
         self.lane_width = int(70 * scale)
         self.fall_speed = int(350 * scale)
@@ -445,7 +448,9 @@ class PreviewCanvas(tk.Canvas):
         self._update_timeline(current_ms)
 
         view_top_ms = current_ms - int(200 * self._scale)
-        view_bottom_ms = current_ms + self.view_window_ms
+        # 用最小速度扩展可视窗口，确保低速音符从屏幕顶部进入
+        min_speed = max(self._min_note_speed, 1.0)
+        view_bottom_ms = current_ms + self.view_window_ms * (10.0 / min_speed)
 
         lane_colors = get_lane_colors(self.keys)
         playing = self.player is not None and not self.player._paused
@@ -630,6 +635,9 @@ class PreviewCanvas(tk.Canvas):
             (n.get("end_time", n["time"]) - n["time"] for n in notes if n.get("type") == "hold" and n.get("end_time")),
             default=0.0
         )
+        self._min_note_speed = min(
+            (n.get("speed", 10.0) for n in notes), default=10.0
+        ) if notes else 10.0
         self._hit_set.clear()
         self._hit_effects.clear()
 

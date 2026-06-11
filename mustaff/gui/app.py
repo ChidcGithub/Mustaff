@@ -360,6 +360,13 @@ class MustaffGUI:
         ttk.Label(self._adv_content, textvariable=self.ln_tendency_var, width=4).grid(row=row, column=2)
         row += 1
 
+        ttk.Label(self._adv_content, text="能量对比度:").grid(row=row, column=0, sticky="w", pady=int(2*s))
+        self.contrast_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(self._adv_content, from_=0.1, to=3.5, variable=self.contrast_var,
+                  orient="horizontal", length=int(120*s)).grid(row=row, column=1, padx=int(5*s), pady=int(2*s))
+        ttk.Label(self._adv_content, textvariable=self.contrast_var, width=4).grid(row=row, column=2)
+        row += 1
+
         out_frame = ttk.LabelFrame(inner, text="输出目录", padding=int(10*s))
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self.out_label = ttk.Label(out_frame, text=os.getcwd(), foreground="gray")
@@ -393,7 +400,7 @@ class MustaffGUI:
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.4.0", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.4.2", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
@@ -632,6 +639,7 @@ class MustaffGUI:
                 self.max_bpm_var.get(),
                 self.complexity_var.get(),
                 self.ln_tendency_var.get(),
+                self.contrast_var.get(),
             ),
             daemon=True,
         )
@@ -644,7 +652,7 @@ class MustaffGUI:
                          multi_band: bool = False, snap_to_beat: bool = False,
                          snap_resolution: int = 8, min_bpm: float = 50.0,
                          max_bpm: float = 200.0, complexity: float = 1.0,
-                         ln_tendency: float = 0.5):
+                         ln_tendency: float = 0.5, contrast: float = 1.0):
         """后台线程执行生成任务"""
         def report(step: int, total: int, msg: str):
             self._progress_queue.put({"type": "progress", "step": step, "total": total, "msg": msg})
@@ -680,6 +688,7 @@ class MustaffGUI:
                 snap_resolution=snap_resolution,
                 complexity=complexity,
                 ln_tendency=ln_tendency,
+                contrast=contrast,
             )
             notes = mapper.map_notes(
                 features, beat_subdivisions=beat_subdivisions,
