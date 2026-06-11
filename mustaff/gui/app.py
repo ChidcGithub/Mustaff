@@ -69,9 +69,9 @@ class MustaffGUI:
         self.root = tk.Tk()
         self.root.title("Mustaff")
 
-        sv_ttk.set_theme("light")
-
         self._scale = self._detect_scale()
+
+        sv_ttk.set_theme("light")
         base_w, base_h = 1000, 700
         self.root.geometry(f"{int(base_w * self._scale)}x{int(base_h * self._scale)}")
         self.root.minsize(int(900 * self._scale), int(650 * self._scale))
@@ -113,7 +113,7 @@ class MustaffGUI:
             except Exception:
                 dpi = 96
         scale = dpi / 96.0
-        self.root.tk.call("tk", "scaling", dpi / 72.0)
+        self.root.tk.call("tk", "scaling", dpi / 96.0)
         return scale
 
     def _init_taskbar(self):
