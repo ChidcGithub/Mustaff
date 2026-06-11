@@ -324,6 +324,11 @@ class MustaffGUI:
             row=row, column=0, columnspan=3, sticky="w", pady=int(2*s))
         row += 1
 
+        self.multi_process_pitch_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self._adv_content, text="多进程音高检测", variable=self.multi_process_pitch_var).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=int(2*s))
+        row += 1
+
         self.snap_to_beat_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(self._adv_content, text="节拍吸附", variable=self.snap_to_beat_var).grid(
             row=row, column=0, sticky="w", pady=int(2*s))
@@ -400,7 +405,7 @@ class MustaffGUI:
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.4.2", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.4.4", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
@@ -633,6 +638,7 @@ class MustaffGUI:
                 self.onset_sens_var.get(),
                 self.backtrack_var.get(),
                 self.multi_band_var.get(),
+                self.multi_process_pitch_var.get(),
                 self.snap_to_beat_var.get(),
                 int(self.snap_res_var.get()),
                 self.min_bpm_var.get(),
@@ -649,7 +655,8 @@ class MustaffGUI:
     def _generate_worker(self, input_path: str, keys: int, density: float,
                          ln_threshold: float, difficulty: str,
                          onset_sensitivity: float = 0.5, backtrack: bool = False,
-                         multi_band: bool = False, snap_to_beat: bool = False,
+                         multi_band: bool = False, multi_process_pitch: bool = False,
+                         snap_to_beat: bool = False,
                          snap_resolution: int = 8, min_bpm: float = 50.0,
                          max_bpm: float = 200.0, complexity: float = 1.0,
                          ln_tendency: float = 0.5, contrast: float = 1.0):
@@ -665,6 +672,7 @@ class MustaffGUI:
                 multi_band=multi_band,
                 min_bpm=min_bpm,
                 max_bpm=max_bpm,
+                multi_process_pitch=multi_process_pitch,
             )
             analyzer.load(input_path)
 

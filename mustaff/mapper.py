@@ -388,12 +388,10 @@ class BeatMapper:
         # 因子 2: 局部密度 (±500ms 内的音符数)
         times = np.array([note["time"] for note in notes], dtype=float)
         density_window_ms = 500.0
-        density_factors = np.ones(n)
-        for i in range(n):
-            t = times[i]
-            count = int(np.sum((times >= t - density_window_ms) & (times <= t + density_window_ms))) - 1
-            density_norm = min(count / 10.0, 1.0)  # 10个音符=满密度
-            density_factors[i] = 1.0 - 0.2 * density_norm  # [0.8, 1.0]
+        left = np.searchsorted(times, times - density_window_ms)
+        right = np.searchsorted(times, times + density_window_ms, side='right')
+        counts = right - left - 1
+        density_factors = 1.0 - 0.2 * np.clip(counts / 10.0, 0.0, 1.0)
 
         # 组合
         raw_speeds = 10.0 * energy_factors * density_factors

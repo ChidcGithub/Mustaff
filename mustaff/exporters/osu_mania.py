@@ -97,10 +97,21 @@ class OsuManiaExporter(BaseExporter):
 
         # [TimingPoints]
         lines.append("[TimingPoints]")
-        # 主时间点
+        # 主时间点（uninherited / 红线）
         beat_length = 60000.0 / self.bpm
-        # 格式：offset, beatLength, meter, sampleSet, sampleIndex, volume, uninherited, effects
         lines.append(f"{round(self.offset)},{beat_length:.6f},4,0,0,100,1,0")
+
+        # SV 变速时间点（inherited / 绿线）
+        # 公式：inherited_beatLength = -1000.0 / speed
+        # 只在速度变化时插入，合并连续相同速度
+        last_speed = None
+        for note in self.notes:
+            speed = note.get("speed", 10.0)
+            if speed != last_speed:
+                inherited_beat_length = -1000.0 / speed
+                lines.append(f"{int(note['time'])},{inherited_beat_length:.2f},4,0,0,100,0,0")
+                last_speed = speed
+
         lines.append("")
 
         # [HitObjects]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Callable, List, Tuple, Optional
 import numpy as np
 import librosa
@@ -7,6 +9,11 @@ import librosa
 
 def _scalar(x):
     return x.item() if hasattr(x, 'item') else x
+
+
+def _run_pyin(y: np.ndarray, sr: int, fmin: float, fmax: float, hop_length: int):
+    """Module-level function for ProcessPoolExecutor — runs librosa.pyin in a subprocess."""
+    return librosa.pyin(y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length)
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -27,6 +34,7 @@ class AudioAnalyzer:
         n_fft: int = 2048,
         min_bpm: float = 50.0,
         max_bpm: float = 200.0,
+        multi_process_pitch: bool = False,
     ):
         self.sr = sr
         self.hop_length = hop_length
@@ -38,6 +46,7 @@ class AudioAnalyzer:
         self.n_fft = n_fft
         self.min_bpm = min_bpm
         self.max_bpm = max_bpm
+        self.multi_process_pitch = multi_process_pitch
 
         self.y: Optional[np.ndarray] = None
         self.duration: float = 0.0
@@ -74,20 +83,35 @@ class AudioAnalyzer:
             raise RuntimeError("请先调用 load() 或 load_array() 加载音频")
 
         if progress_callback:
-            progress_callback(5, "检测 Onset...")
-        self._analyze_onset()
+            progress_callback(5, "分析中... (并行提取特征)")
 
-        if progress_callback:
-            progress_callback(20, "检测 Beat...")
-        self._analyze_beat()
+        n_workers = os.cpu_count() or 4
 
-        if progress_callback:
-            progress_callback(35, "提取音高...")
-        self._analyze_pitch()
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(self._analyze_onset): "onset",
+                pool.submit(self._analyze_beat): "beat",
+                pool.submit(self._analyze_rms): "rms",
+            }
 
-        if progress_callback:
-            progress_callback(75, "分析能量...")
-        self._analyze_rms()
+            if self.multi_process_pitch:
+                pitch_pool = ProcessPoolExecutor(max_workers=1)
+                pitch_future = pitch_pool.submit(
+                    _run_pyin, self.y, self.sr, self.fmin, self.fmax, self.hop_length,
+                )
+            else:
+                futures[pool.submit(self._analyze_pitch)] = "pitch"
+
+            for f in as_completed(futures):
+                f.result()
+
+            if self.multi_process_pitch:
+                pitches, _, voiced_probs = pitch_future.result()
+                self.pitches = pitches
+                self.pitch_confidences = voiced_probs
+                pitch_pool.shutdown(wait=False)
+            else:
+                pass
 
         if progress_callback:
             progress_callback(85, "分析完成")
@@ -124,20 +148,19 @@ class AudioAnalyzer:
             ("mid", 250, 2000),
             ("high", 2000, 8000),
         ]
-        all_onset_frames = []
-        all_bands = []
 
         S = np.abs(librosa.stft(self.y, n_fft=self.n_fft, hop_length=self.hop_length))
-        for band_idx, (name, lo, hi) in enumerate(bands):
+
+        def _detect_band(band_idx: int, lo: float, hi: float):
             lo_bin = max(0, int(lo * self.n_fft // self.sr))
             hi_bin = min(self.n_fft // 2, int(hi * self.n_fft // self.sr))
             n_bins = hi_bin - lo_bin
             if n_bins < 2:
-                continue
+                return band_idx, np.array([], dtype=int)
 
             band_S = S[lo_bin:hi_bin, :]
             if band_S.size == 0:
-                continue
+                return band_idx, np.array([], dtype=int)
 
             onset_env = librosa.onset.onset_strength(
                 S=band_S, sr=self.sr, hop_length=self.hop_length,
@@ -149,8 +172,17 @@ class AudioAnalyzer:
                 backtrack=self.backtrack,
                 delta=self._onset_delta(),
             )
-            all_onset_frames.extend(frames.tolist())
-            all_bands.extend([band_idx] * len(frames))
+            return band_idx, frames
+
+        n_workers = min(os.cpu_count() or 4, len(bands))
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = [pool.submit(_detect_band, i, lo, hi) for i, (_, lo, hi) in enumerate(bands)]
+            all_onset_frames = []
+            all_bands = []
+            for f in as_completed(futures):
+                band_idx, frames = f.result()
+                all_onset_frames.extend(frames.tolist())
+                all_bands.extend([band_idx] * len(frames))
 
         if not all_onset_frames:
             self.onset_frames = np.array([], dtype=int)

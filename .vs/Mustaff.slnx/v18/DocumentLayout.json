@@ -1,0 +1,58 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\mustaff\\analyzer.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:mustaff\\analyzer.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\entry_gui.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:entry_gui.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "analyzer.py",
+              "DocumentMoniker": "D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\mustaff\\analyzer.py",
+              "RelativeDocumentMoniker": "mustaff\\analyzer.py",
+              "ToolTip": "D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\mustaff\\analyzer.py",
+              "RelativeToolTip": "mustaff\\analyzer.py",
+              "ViewState": "AgIAAKgAAAAAAAAAAAAAAAQAAAAOAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAQpSURBVFhHvVZRSFtnFP7\u002B/8b15iZpQmnX1PXBQkbjsCxCOiiE4t50MNjwQXzSvow87KEPgmF7UIvV7cmBA4UFtG8K\u002BuTDBnPYkRRhY\u002Bwhs6YuIZlLW1vDzNQl3tt7c/YQE3NvrhKr9YPDzf3\u002B89/v5Jzzn3sZotsBgA8A8OCEEKAlrEL\u002B/u6tKw\u002BNa6YgIobo7u8AfMa140JgRUisACsvQBIKH6ZvNtcVBD9tcRvPw8byU20rS3ajnxkYortkJI8Do7jEStethr/w51vrRvc/wOgurn/5U5ng\u002BvXj4TBxiRfwbtGBSyQat7SA2DfVxGsHcJS4xAqQeB63NQcawIxbW6pvDi9BoK4S1o/4yMFv7xeVqF47A6eFMwvgHMwTXVcAqVSqYrFYDGNjYxDFUoO53W5MTU0hlUphZ2cHkUgEfr/f\u002BAh0W14YKaDeAJqamrC4uIjBwUGEw2EEg0GMjo7CbrdjaWkJ7e3tmJycRDAYhKqqWF5ehs\u002BnHy\u002BfNDzF\u002B0JOx5UQ3SVTAypGRNTT01O5j0QiFIlEaGBggIiIvF5vZU0URZqYmND5A6Af/\u002B6gufUOsq/dW6mWr\u002BsUEBHC4TCi0Si8Xi/6\u002BvowPDwMv98Pj8eD5uZm3VYzPMq0QeIFpCF\u002B/2njzx\u002BV\u002BbpKAACBQAC9vb3w\u002BXwIhUIYGhpCJpOBy\u002BUyuppC4qXZcFN42rG1ebXtYMWY\u002BuguCY\u002B2jyxB2bq6uoiIqLOzs8K53W5aXV2l/v5\u002Bne\u002BTjRuUeeGhfzbfoVzWnXr58pIdZhkoT7h6MD8/j7m5OczMzGBhYQHj4\u002BOIxWKw2\u002B2YnZ3V\u002BdpYARIvgEMDCE0NEEZhDKB6vFZjenoayWRSxwGAqqro7u5GKBSCKIrweDwIh8NobW1FOp3W\u002BVbE98EYPt/adLdVmtA421MfvFe9/8TIbbqNFAA85DARr7cEp4DbXGDFrFHcxvNGxzcFziW\u002B12flBdX4Sj0r8J1bbz84j3\u002BvSdj7ysbz2fL7/Kyg\u002B1poePz13atwjF3XrPjhxp0KT2Q\u002BLAGAsZoPDlMc0oT6Y6gJ6si2ZQNrYryaBmPsUDspdAEUiVllEiCTUE2/UdRMQpkEyDi7APQ5jI8QADiYAidT4GQynFwuXavsmvAfWoQtNPEcbIYJd1zUZAAAZLJARikT5ZKUMyNDwPOiiF/VC4iol7Gu2aGaP6YOMMV0pwJeIypDgEICFLJA2edzdA4r2kX88uoKMpoDr44bSBEPDt1RmwEL9mCemQIs2CAb0poL2aIExayJibaJECNggYi\u002BJaDNdfn5Z/oeeDKigQ7\u002BRqnmClwmfVDbGwqcXM45ISecXE44\u002BF6CE4\u002BDF5NMFhLnG59ldVr70Afw\u002BP534OwOUDoGItMqAq4D4W0nk9dckBMOriScTIm7mJK8yHcSHzf\u002BZipyFP4HmX4dW\u002BYtA14AAAAASUVORK5CYII=",
+              "WhenOpened": "2026-06-10T07:09:34.601Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "entry_gui.py",
+              "DocumentMoniker": "D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\entry_gui.py",
+              "RelativeDocumentMoniker": "entry_gui.py",
+              "ToolTip": "D:\\My things\\Learn\\\u9AD8\u4E00\\python\\Mustaff\\entry_gui.py",
+              "RelativeToolTip": "entry_gui.py",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAQpSURBVFhHvVZRSFtnFP7\u002B/8b15iZpQmnX1PXBQkbjsCxCOiiE4t50MNjwQXzSvow87KEPgmF7UIvV7cmBA4UFtG8K\u002BuTDBnPYkRRhY\u002Bwhs6YuIZlLW1vDzNQl3tt7c/YQE3NvrhKr9YPDzf3\u002B89/v5Jzzn3sZotsBgA8A8OCEEKAlrEL\u002B/u6tKw\u002BNa6YgIobo7u8AfMa140JgRUisACsvQBIKH6ZvNtcVBD9tcRvPw8byU20rS3ajnxkYortkJI8Do7jEStethr/w51vrRvc/wOgurn/5U5ng\u002BvXj4TBxiRfwbtGBSyQat7SA2DfVxGsHcJS4xAqQeB63NQcawIxbW6pvDi9BoK4S1o/4yMFv7xeVqF47A6eFMwvgHMwTXVcAqVSqYrFYDGNjYxDFUoO53W5MTU0hlUphZ2cHkUgEfr/f\u002BAh0W14YKaDeAJqamrC4uIjBwUGEw2EEg0GMjo7CbrdjaWkJ7e3tmJycRDAYhKqqWF5ehs\u002BnHy\u002BfNDzF\u002B0JOx5UQ3SVTAypGRNTT01O5j0QiFIlEaGBggIiIvF5vZU0URZqYmND5A6Af/\u002B6gufUOsq/dW6mWr\u002BsUEBHC4TCi0Si8Xi/6\u002BvowPDwMv98Pj8eD5uZm3VYzPMq0QeIFpCF\u002B/2njzx\u002BV\u002BbpKAACBQAC9vb3w\u002BXwIhUIYGhpCJpOBy\u002BUyuppC4qXZcFN42rG1ebXtYMWY\u002BuguCY\u002B2jyxB2bq6uoiIqLOzs8K53W5aXV2l/v5\u002Bne\u002BTjRuUeeGhfzbfoVzWnXr58pIdZhkoT7h6MD8/j7m5OczMzGBhYQHj4\u002BOIxWKw2\u002B2YnZ3V\u002BdpYARIvgEMDCE0NEEZhDKB6vFZjenoayWRSxwGAqqro7u5GKBSCKIrweDwIh8NobW1FOp3W\u002BVbE98EYPt/adLdVmtA421MfvFe9/8TIbbqNFAA85DARr7cEp4DbXGDFrFHcxvNGxzcFziW\u002B12flBdX4Sj0r8J1bbz84j3\u002BvSdj7ysbz2fL7/Kyg\u002B1poePz13atwjF3XrPjhxp0KT2Q\u002BLAGAsZoPDlMc0oT6Y6gJ6si2ZQNrYryaBmPsUDspdAEUiVllEiCTUE2/UdRMQpkEyDi7APQ5jI8QADiYAidT4GQynFwuXavsmvAfWoQtNPEcbIYJd1zUZAAAZLJARikT5ZKUMyNDwPOiiF/VC4iol7Gu2aGaP6YOMMV0pwJeIypDgEICFLJA2edzdA4r2kX88uoKMpoDr44bSBEPDt1RmwEL9mCemQIs2CAb0poL2aIExayJibaJECNggYi\u002BJaDNdfn5Z/oeeDKigQ7\u002BRqnmClwmfVDbGwqcXM45ISecXE44\u002BF6CE4\u002BDF5NMFhLnG59ldVr70Afw\u002BP534OwOUDoGItMqAq4D4W0nk9dckBMOriScTIm7mJK8yHcSHzf\u002BZipyFP4HmX4dW\u002BYtA14AAAAASUVORK5CYII=",
+              "WhenOpened": "2026-06-10T07:07:54.511Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -72,6 +72,7 @@ class ProgressSpinner:
 @click.option("--complexity", default=1.0, help="谱面复杂度 (0.5-2.0)", show_default=True)
 @click.option("--ln-tendency", default=0.5, help="长音倾向 (0=尽量少, 1=尽量多)", show_default=True)
 @click.option("--contrast", default=1.0, help="能量对比度 (0.1-3.5)", show_default=True)
+@click.option("--multi-process-pitch/--no-multi-process-pitch", default=False, help="音高检测使用多进程并行", show_default=True)
 def main(
     input_file: str,
     output_dir: str,
@@ -95,6 +96,7 @@ def main(
     ln_tendency: float,
     csv_time_unit: str,
     contrast: float,
+    multi_process_pitch: bool,
 ):
     """Mustaff - 从音频自动生成音游曲谱
 
@@ -114,6 +116,7 @@ def main(
         multi_band=multi_band,
         min_bpm=min_bpm,
         max_bpm=max_bpm,
+        multi_process_pitch=multi_process_pitch,
     )
     analyzer.load(input_file)
 
