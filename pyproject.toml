@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mustaff"
-version = "0.4.5"
+version = "0.5.0"
 description = "自动从音频生成音游曲谱的工具"
 readme = "README.md"
 requires-python = ">=3.9"

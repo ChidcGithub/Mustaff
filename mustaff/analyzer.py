@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Callable, List, Tuple, Optional
+from typing import Callable, List, Optional
 import numpy as np
 import librosa
 
 
 def _scalar(x):
     return x.item() if hasattr(x, 'item') else x
-
-
-def _run_pyin(y: np.ndarray, sr: int, fmin: float, fmax: float, hop_length: int):
-    """Module-level function for ProcessPoolExecutor — runs librosa.pyin in a subprocess."""
-    return librosa.pyin(y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length)
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -46,7 +40,6 @@ class AudioAnalyzer:
         self.n_fft = n_fft
         self.min_bpm = min_bpm
         self.max_bpm = max_bpm
-        self.multi_process_pitch = multi_process_pitch
 
         self.y: Optional[np.ndarray] = None
         self.duration: float = 0.0
@@ -82,39 +75,19 @@ class AudioAnalyzer:
         if self.y is None:
             raise RuntimeError("请先调用 load() 或 load_array() 加载音频")
 
-        if progress_callback:
-            progress_callback(5, "分析中... (并行提取特征)")
+        def _report(pct: int, msg: str):
+            if progress_callback:
+                progress_callback(pct, msg)
 
-        n_workers = max(1, (os.cpu_count() or 4) - 1)
-
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futures = {
-                pool.submit(self._analyze_onset): "onset",
-                pool.submit(self._analyze_beat): "beat",
-                pool.submit(self._analyze_rms): "rms",
-            }
-
-            if self.multi_process_pitch:
-                pitch_pool = ProcessPoolExecutor(max_workers=1)
-                pitch_future = pitch_pool.submit(
-                    _run_pyin, self.y, self.sr, self.fmin, self.fmax, self.hop_length,
-                )
-            else:
-                futures[pool.submit(self._analyze_pitch)] = "pitch"
-
-            for f in as_completed(futures):
-                f.result()
-
-            if self.multi_process_pitch:
-                pitches, _, voiced_probs = pitch_future.result()
-                self.pitches = pitches
-                self.pitch_confidences = voiced_probs
-                pitch_pool.shutdown(wait=False)
-            else:
-                pass
-
-        if progress_callback:
-            progress_callback(85, "分析完成")
+        _report(5, "节拍检测...")
+        self._analyze_beat()
+        _report(30, "起音检测...")
+        self._analyze_onset()
+        _report(55, "音量检测...")
+        self._analyze_rms()
+        _report(75, "音高检测...")
+        self._analyze_pitch()
+        _report(100, "分析完成")
 
         return self
 

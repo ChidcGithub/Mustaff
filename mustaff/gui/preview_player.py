@@ -298,7 +298,7 @@ class PreviewCanvas(tk.Canvas):
                 x, self.judge_line_y + int(15*s),
                 text=f"D{i+1}",
                 fill=self.TEXT_COLOR,
-                font=("Consolas", max(8, int(10*s))),
+                font=("Consolas", 10),
                 tags="static"
             )
 
@@ -323,7 +323,7 @@ class PreviewCanvas(tk.Canvas):
             self.canvas_width // 2, int(20*s),
             text="00:00.000 / 00:00.000",
             fill=self.TEXT_COLOR,
-            font=("Consolas", max(8, int(12*s))),
+            font=("Consolas", 12),
             tags="static"
         )
 
@@ -339,7 +339,7 @@ class PreviewCanvas(tk.Canvas):
             self.canvas_width // 2, btn_y + int(12*s),
             text="▶ 播放",
             fill=self.TEXT_COLOR,
-            font=("Consolas", max(8, int(11*s))),
+            font=("Consolas", 11),
             tags="btn"
         )
 

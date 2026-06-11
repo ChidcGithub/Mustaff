@@ -72,6 +72,7 @@ class MustaffGUI:
         self._scale = self._detect_scale()
 
         sv_ttk.set_theme("light")
+        self._scale_fonts()
         base_w, base_h = 1000, 700
         self.root.geometry(f"{int(base_w * self._scale)}x{int(base_h * self._scale)}")
         self.root.minsize(int(900 * self._scale), int(650 * self._scale))
@@ -113,8 +114,35 @@ class MustaffGUI:
             except Exception:
                 dpi = 96
         scale = dpi / 96.0
-        self.root.tk.call("tk", "scaling", dpi / 96.0)
+        self.root.tk.call("tk", "scaling", scale)
         return scale
+
+    def _scale_fonts(self):
+        """缩放 sv_ttk 负数字体和精灵图元素尺寸"""
+        import tkinter.font as tkfont
+        s = self._scale
+        for name in self.root.tk.call("font", "names"):
+            try:
+                font_obj = tkfont.nametofont(name)
+                size = font_obj.cget("size")
+                if isinstance(size, int) and size < 0:
+                    new_size = max(8, int(abs(size) * s))
+                    font_obj.configure(size=-new_size)
+            except Exception:
+                pass
+        for elem, opts in {
+            "Combobox.arrow":        {"-width": int(34 * s)},
+            "Spinbox.uparrow":       {"-width": int(34 * s), "-height": int(16 * s)},
+            "Spinbox.downarrow":     {"-width": int(34 * s), "-height": int(16 * s)},
+            "Scale.slider":          {"-width": int(20 * s), "-height": int(20 * s)},
+            "Menubutton.indicator":  {"-width": int(10 * s)},
+            "OptionMenu.indicator":  {"-width": int(10 * s)},
+        }.items():
+            try:
+                self.root.tk.call("ttk::style", "element", "configure", elem,
+                                  *sum(opts.items(), ()))
+            except Exception:
+                pass
 
     def _init_taskbar(self):
         """初始化 Windows 任务栏进度条 (ITaskbarList3 via comtypes)"""
@@ -335,8 +363,6 @@ class MustaffGUI:
         row += 1
 
         self.multi_process_pitch_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self._adv_content, text="多进程音高检测", variable=self.multi_process_pitch_var).grid(
-            row=row, column=0, columnspan=3, sticky="w", pady=int(2*s))
         row += 1
 
         self.snap_to_beat_var = tk.BooleanVar(value=False)
@@ -416,13 +442,13 @@ class MustaffGUI:
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.4.5", foreground="gray",
-                  font=("", max(7, int(8*s)))).pack(anchor="center")
+        ttk.Label(about_frame, text="Mustaff v0.5.0", foreground="gray",
+                  font=("", 7)).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
-                  font=("", max(7, int(8*s)))).pack(anchor="center")
+                  font=("", 7)).pack(anchor="center")
         github_link = tk.Label(about_frame, text="GitHub",
                                fg="#0078d4", cursor="hand2",
-                               font=("", max(7, int(8*s)), "underline"))
+                               font=("", 7, "underline"))
         github_link.pack(anchor="center")
         github_link.bind("<Button-1>", lambda e: self._open_url("https://github.com/ChidcGithub/Mustaff"))
 
@@ -438,7 +464,7 @@ class MustaffGUI:
         self._preview_container.pack(fill="both", expand=True)
 
         # Matplotlib 静态预览
-        self.fig = Figure(figsize=(8, 5), dpi=int(100*s), facecolor="white")
+        self.fig = Figure(figsize=(8, 5), dpi=max(100, int(100 + 50*(s - 1))), facecolor="white")
         self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor("white")
         self.ax.text(
@@ -490,7 +516,6 @@ class MustaffGUI:
         self.log_text.insert("end", message + "\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
-        self.root.update_idletasks()
 
     def _browse_file(self):
         path = filedialog.askopenfilename(
@@ -698,7 +723,7 @@ class MustaffGUI:
 
             analyzer.analyze(progress_callback=on_progress)
 
-            report(75, 100, "映射音符...")
+            report(90, 100, "映射音符...")
             features = analyzer.get_note_features()
 
             beat_subdivisions = None
@@ -743,7 +768,7 @@ class MustaffGUI:
     def _poll_progress(self):
         """主线程轮询进度队列，更新 UI"""
         try:
-            while True:
+            for _ in range(5):
                 item = self._progress_queue.get_nowait()
                 if item["type"] == "progress":
                     pct = int(item["step"] / item["total"] * 100)
@@ -790,6 +815,8 @@ class MustaffGUI:
                     return
         except queue.Empty:
             pass
+
+        self.root.update_idletasks()
 
         # 继续轮询
         self.root.after(50, self._poll_progress)
@@ -962,7 +989,7 @@ class MustaffGUI:
         hit_count = sum(len(t) for t, _ in hit_by_col.values())
         hold_count = len(hold_segments)
         info = f"Keys: {keys}  |  Notes: {hit_count} hits + {hold_count} holds = {len(notes)} total"
-        self.ax.set_title(f"{title} [{keys}K]\n{info}", fontsize=max(8, int(11*s)), color="black", pad=int(8*s))
+        self.ax.set_title(f"{title} [{keys}K]\n{info}", fontsize=11, color="black", pad=int(8*s))
 
         legend_elements = []
         for i in range(min(keys, len(lane_colors_notes))):
