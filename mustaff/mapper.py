@@ -99,7 +99,7 @@ class BeatMapper:
 
             snapped_note = dict(note)
             snapped_note["time"] = snapped_time
-            if snapped_note.get("end_time"):
+            if snapped_note.get("end_time") is not None:
                 end_t = snapped_note["end_time"] / 1000.0
                 idx_end = np.argmin(np.abs(beat_subdivisions - end_t))
                 snapped_note["end_time"] = int(round(beat_subdivisions[idx_end] * 1000))
@@ -234,6 +234,11 @@ class BeatMapper:
         adjusted_threshold = self.jack_threshold_ms / max(0.1, self.complexity)
         assignments = list(assignments)
 
+        col_indices: Dict[int, List[int]] = {c: [] for c in range(self.keys)}
+        for i, col in enumerate(assignments):
+            if 0 <= col < self.keys:
+                col_indices[col].append(i)
+
         for col in range(self.keys):
             last_time = -999999
             i = 0
@@ -250,10 +255,11 @@ class BeatMapper:
                             continue
                         has_conflict = any(
                             abs(features[j]["time_ms"] - time_ms) < self.density_filter_ms
-                            for j in range(len(features))
-                            if assignments[j] == new_col
+                            for j in col_indices[new_col]
                         )
                         if not has_conflict:
+                            col_indices[col].remove(i)
+                            col_indices[new_col].append(i)
                             assignments[i] = new_col
                             moved = True
                             break

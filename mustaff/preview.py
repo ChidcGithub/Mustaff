@@ -1,24 +1,6 @@
 from typing import List, Dict, Any, Optional
 import numpy as np
-
-
-LANE_PALETTES = {
-    4: ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A"],
-    6: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#A78BFA", "#FFA07A"],
-    7: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#6C5CE7", "#A78BFA", "#FFA07A"],
-}
-
-
-def _lane_colors(keys: int) -> list:
-    if keys in LANE_PALETTES:
-        return LANE_PALETTES[keys]
-    import colorsys
-    colors = []
-    for i in range(keys):
-        hue = (i / keys) * 0.85
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
-        colors.append(f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}")
-    return colors
+from .colors import lane_colors, LANE_PALETTES
 
 
 def generate_preview(
@@ -37,16 +19,16 @@ def generate_preview(
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
-    lane_colors_bg = ["#1a1a2e", "#16213e"]
-    lane_colors_notes = _lane_colors(keys)
+    lane_colors_bg = ["#f0f0f0", "#e8e8e8"]
+    lane_colors_notes = lane_colors(keys)
 
     for i in range(keys):
         ax.axhspan(i - 0.5, i + 0.5, color=lane_colors_bg[i % 2], alpha=0.3, zorder=0)
     for i in range(keys + 1):
-        ax.axhline(i - 0.5, color="#444", linewidth=0.5, zorder=1)
+        ax.axhline(i - 0.5, color="#cccccc", linewidth=0.5, zorder=1)
 
     max_time_s = 0.0
-    if duration_ms:
+    if duration_ms is not None:
         max_time_s = duration_ms / 1000.0
     elif notes:
         max_time_s = max(n["time"] for n in notes) / 1000.0 * 1.05
@@ -60,7 +42,7 @@ def generate_preview(
             grid_spacing = 10
 
         for t in np.arange(0, max_time_s + grid_spacing, grid_spacing):
-            ax.axvline(t, color="#555", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
+            ax.axvline(t, color="#cccccc", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
 
     hit_by_col: Dict[int, tuple] = {}
     hold_segments = []
@@ -103,22 +85,22 @@ def generate_preview(
     if max_time_s > 0:
         ax.set_xlim(0, max_time_s)
 
-    ax.set_xlabel("Time (s)", fontsize=10, color="white")
+    ax.set_xlabel("Time (s)", fontsize=10, color="black")
 
-    ax.set_facecolor("#0f0f1a")
-    fig.patch.set_facecolor("#0f0f1a")
-    ax.tick_params(colors="white", labelsize=8)
-    ax.xaxis.label.set_color("white")
-    ax.yaxis.label.set_color("white")
-    ax.spines["bottom"].set_color("#555")
-    ax.spines["left"].set_color("#555")
+    ax.set_facecolor("white")
+    fig.patch.set_facecolor("white")
+    ax.tick_params(colors="black", labelsize=8)
+    ax.xaxis.label.set_color("black")
+    ax.yaxis.label.set_color("black")
+    ax.spines["bottom"].set_color("#cccccc")
+    ax.spines["left"].set_color("#cccccc")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     hit_count = sum(len(t) for t, _ in hit_by_col.values())
     hold_count = len(hold_segments)
     info_text = f"Keys: {keys}  |  Notes: {hit_count} hits + {hold_count} holds = {len(notes)} total"
-    ax.set_title(f"{title}\n{info_text}", fontsize=12, color="white", pad=10)
+    ax.set_title(f"{title}\n{info_text}", fontsize=12, color="black", pad=10)
 
     legend_elements = []
     for i in range(min(keys, len(lane_colors_notes))):
@@ -131,9 +113,9 @@ def generate_preview(
     legend = ax.legend(
         handles=legend_elements,
         loc="upper right",
-        facecolor="#1a1a2e",
-        edgecolor="#555",
-        labelcolor="white",
+        facecolor="white",
+        edgecolor="#cccccc",
+        labelcolor="black",
         fontsize=7,
         ncol=2,
     )

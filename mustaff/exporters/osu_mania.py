@@ -100,7 +100,7 @@ class OsuManiaExporter(BaseExporter):
         # 主时间点
         beat_length = 60000.0 / self.bpm
         # 格式：offset, beatLength, meter, sampleSet, sampleIndex, volume, uninherited, effects
-        lines.append(f"{int(self.offset)},{beat_length:.6f},4,0,0,100,1,0")
+        lines.append(f"{round(self.offset)},{beat_length:.6f},4,0,0,100,1,0")
         lines.append("")
 
         # [HitObjects]

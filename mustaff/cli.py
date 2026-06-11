@@ -165,15 +165,24 @@ def main(
 
     if len(export_tasks) > 1:
         spinner.update("并行导出...")
-        with ThreadPoolExecutor(max_workers=len(export_tasks)) as ex:
-            fut_map = {ex.submit(task): name for name, _, task in export_tasks}
-            for fut in as_completed(fut_map):
-                fut.result()
-                click.echo(f"[OK] 已导出 {fut_map[fut]} 谱面")
+        try:
+            with ThreadPoolExecutor(max_workers=len(export_tasks)) as ex:
+                fut_map = {ex.submit(task): name for name, _, task in export_tasks}
+                for fut in as_completed(fut_map):
+                    try:
+                        fut.result()
+                        click.echo(f"[OK] 已导出 {fut_map[fut]} 谱面")
+                    except Exception as e:
+                        click.echo(f"[Error] 导出 {fut_map[fut]} 失败: {e}", err=True)
+        except Exception as e:
+            click.echo(f"[Error] 并行导出失败: {e}", err=True)
     else:
         for name, path, task in export_tasks:
-            task()
-            click.echo(f"[OK] 已导出 {name} 谱面: {path}")
+            try:
+                task()
+                click.echo(f"[OK] 已导出 {name} 谱面: {path}")
+            except Exception as e:
+                click.echo(f"[Error] 导出 {name} 失败: {e}", err=True)
 
     if preview:
         spinner.update("生成预览图...")

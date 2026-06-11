@@ -12,8 +12,10 @@ import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from typing import Optional, Dict, Any, List
+from typing import Optional
 import numpy as np
+
+import sv_ttk
 
 # Matplotlib 嵌入
 import matplotlib
@@ -33,7 +35,7 @@ from ..analyzer import AudioAnalyzer
 from ..mapper import BeatMapper
 from ..exporters.osu_mania import OsuManiaExporter
 from ..exporters.json_exporter import JsonExporter
-from ..preview import generate_preview
+from ..colors import lane_colors
 from .preview_player import PreviewCanvas, AudioPlayer
 
 try:
@@ -47,12 +49,15 @@ class MustaffGUI:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Mustaff - 自动生成音游谱面")
+        self.root.title("Mustaff")
+
+        sv_ttk.set_theme("light")
 
         self._scale = self._detect_scale()
         base_w, base_h = 1000, 700
         self.root.geometry(f"{int(base_w * self._scale)}x{int(base_h * self._scale)}")
         self.root.minsize(int(900 * self._scale), int(650 * self._scale))
+        self.root.state("zoomed")
 
         self.input_path: Optional[str] = None
         self.current_notes: list = []
@@ -68,13 +73,26 @@ class MustaffGUI:
         self._build_ui()
 
     def _detect_scale(self) -> float:
-        import ctypes
-        try:
-            hdc = ctypes.windll.user32.GetDC(0)
-            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
-            ctypes.windll.user32.ReleaseDC(0, hdc)
-        except Exception:
-            dpi = 96
+        import platform
+        system = platform.system()
+        if system == "Windows":
+            try:
+                import ctypes
+                hdc = ctypes.windll.user32.GetDC(0)
+                dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
+                ctypes.windll.user32.ReleaseDC(0, hdc)
+            except Exception:
+                dpi = 96
+        elif system == "Darwin":
+            try:
+                dpi = int(self.root.tk.call("tk", "scaling") * 72)
+            except Exception:
+                dpi = 96
+        else:
+            try:
+                dpi = int(self.root.tk.call("tk", "scaling") * 72)
+            except Exception:
+                dpi = 96
         scale = dpi / 96.0
         if scale > 1.25:
             self.root.tk.call("tk", "scaling", dpi / 72.0)
@@ -89,13 +107,39 @@ class MustaffGUI:
         left_frame = ttk.Frame(main_paned, width=int(320*s))
         main_paned.add(left_frame, weight=0)
 
-        file_frame = ttk.LabelFrame(left_frame, text="音频文件", padding=int(10*s))
+        log_frame = ttk.LabelFrame(left_frame, text="日志", padding=int(5*s))
+        log_frame.pack(side="bottom", fill="both", padx=int(5*s), pady=int(5*s))
+        self.log_text = tk.Text(log_frame, height=max(10, int(10*s)), state="disabled", wrap="word")
+        self.log_text.pack(fill="x")
+        scrollbar = ttk.Scrollbar(self.log_text, command=self.log_text.yview)
+        self.log_text.config(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+
+        self._left_canvas = tk.Canvas(left_frame, highlightthickness=0)
+        left_scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=self._left_canvas.yview)
+        self._scrollable_inner = ttk.Frame(self._left_canvas)
+
+        self._scrollable_inner.bind("<Configure>", lambda e: self._left_canvas.configure(scrollregion=self._left_canvas.bbox("all")))
+        self._canvas_window = self._left_canvas.create_window((0, 0), window=self._scrollable_inner, anchor="nw")
+        self._left_canvas.configure(yscrollcommand=left_scrollbar.set)
+
+        self._left_canvas.bind("<Configure>", self._on_canvas_resize)
+
+        self._left_canvas.pack(side="left", fill="both", expand=True)
+        left_scrollbar.pack(side="right", fill="y")
+
+        self._left_canvas.bind("<Enter>", lambda e: self._bind_mousewheel())
+        self._left_canvas.bind("<Leave>", lambda e: self._unbind_mousewheel())
+
+        inner = self._scrollable_inner
+
+        file_frame = ttk.LabelFrame(inner, text="音频文件", padding=int(10*s))
         file_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self.file_label = ttk.Label(file_frame, text="未选择文件", foreground="gray")
         self.file_label.pack(side="left", fill="x", expand=True)
         ttk.Button(file_frame, text="浏览...", command=self._browse_file).pack(side="right")
 
-        param_frame = ttk.LabelFrame(left_frame, text="谱面参数", padding=int(10*s))
+        param_frame = ttk.LabelFrame(inner, text="谱面参数", padding=int(10*s))
         param_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
 
         ttk.Label(param_frame, text="轨道数 (Keys):").grid(row=0, column=0, sticky="w", pady=int(3*s))
@@ -120,19 +164,12 @@ class MustaffGUI:
         fmt_combo = ttk.Combobox(param_frame, textvariable=self.format_var, values=["osu", "json", "both"], width=10, state="readonly")
         fmt_combo.grid(row=4, column=1, sticky="w", pady=int(3*s))
 
-        # ===== 高级选项（可折叠） =====
-        self._adv_expanded = False
-        adv_frame = ttk.LabelFrame(left_frame, text="▶ 高级选项", padding=int(10*s))
+        # ===== 高级选项 =====
+        adv_frame = ttk.LabelFrame(inner, text="高级选项", padding=int(10*s))
         adv_frame.pack(fill="x", padx=int(5*s), pady=int(2*s))
 
-        header_frame = ttk.Frame(adv_frame)
-        header_frame.pack(fill="x")
-        self._adv_toggle_btn = ttk.Label(header_frame, text="▶ 高级选项", font=("", max(8, int(9*s)), "bold"),
-                                          cursor="hand2")
-        self._adv_toggle_btn.pack(anchor="w")
-        self._adv_toggle_btn.bind("<Button-1>", lambda e: self._toggle_adv(adv_frame))
-
         self._adv_content = ttk.Frame(adv_frame)
+        self._adv_content.pack(fill="x")
         row = 0
 
         ttk.Label(self._adv_content, text="Onset 灵敏度:").grid(row=row, column=0, sticky="w", pady=int(2*s))
@@ -188,21 +225,21 @@ class MustaffGUI:
         ttk.Label(self._adv_content, textvariable=self.ln_tendency_var, width=4).grid(row=row, column=2)
         row += 1
 
-        out_frame = ttk.LabelFrame(left_frame, text="输出目录", padding=int(10*s))
+        out_frame = ttk.LabelFrame(inner, text="输出目录", padding=int(10*s))
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self.out_label = ttk.Label(out_frame, text=os.getcwd(), foreground="gray")
         self.out_label.pack(side="left", fill="x", expand=True)
         self.output_dir = os.getcwd()
         ttk.Button(out_frame, text="更改...", command=self._browse_out).pack(side="right")
 
-        prog_frame = ttk.LabelFrame(left_frame, text="进度", padding=int(5*s))
+        prog_frame = ttk.LabelFrame(inner, text="进度", padding=int(5*s))
         prog_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self._status_label = ttk.Label(prog_frame, text="就绪", foreground="gray")
         self._status_label.pack(anchor="w")
         self._progress_bar = ttk.Progressbar(prog_frame, mode="determinate", maximum=100)
         self._progress_bar.pack(fill="x", pady=int(2*s))
 
-        btn_frame = ttk.Frame(left_frame)
+        btn_frame = ttk.Frame(inner)
         btn_frame.pack(fill="x", padx=int(5*s), pady=int(10*s))
         self.gen_btn = ttk.Button(btn_frame, text="生成谱面", command=self._generate)
         self.gen_btn.pack(fill="x", pady=int(2*s))
@@ -213,13 +250,17 @@ class MustaffGUI:
         self.back_btn = ttk.Button(btn_frame, text="← 返回静态预览", command=self._switch_to_static, state="disabled")
         self.back_btn.pack(fill="x", pady=int(2*s))
 
-        log_frame = ttk.LabelFrame(left_frame, text="日志", padding=int(5*s))
-        log_frame.pack(fill="both", expand=True, padx=int(5*s), pady=int(5*s))
-        self.log_text = tk.Text(log_frame, height=max(8, int(8*s)), state="disabled", wrap="word")
-        self.log_text.pack(fill="both", expand=True)
-        scrollbar = ttk.Scrollbar(self.log_text, command=self.log_text.yview)
-        self.log_text.config(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
+        about_frame = ttk.Frame(inner)
+        about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        ttk.Label(about_frame, text="Mustaff v0.3.0", foreground="gray",
+                  font=("", max(7, int(8*s)))).pack(anchor="center")
+        ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
+                  font=("", max(7, int(8*s)))).pack(anchor="center")
+        github_link = tk.Label(about_frame, text="GitHub",
+                               fg="#0078d4", cursor="hand2",
+                               font=("", max(7, int(8*s)), "underline"))
+        github_link.pack(anchor="center")
+        github_link.bind("<Button-1>", lambda e: self._open_url("https://github.com/ChidcGithub/Mustaff"))
 
         # ===== 右侧预览面板 =====
         right_frame = ttk.Frame(main_paned)
@@ -233,9 +274,9 @@ class MustaffGUI:
         self._preview_container.pack(fill="both", expand=True)
 
         # Matplotlib 静态预览
-        self.fig = Figure(figsize=(8, 5), dpi=int(100*s), facecolor="#0f0f1a")
+        self.fig = Figure(figsize=(8, 5), dpi=int(100*s), facecolor="white")
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor("#0f0f1a")
+        self.ax.set_facecolor("white")
         self.ax.text(
             0.5, 0.5, "点击「生成谱面」后预览将显示在这里",
             transform=self.ax.transAxes,
@@ -245,7 +286,7 @@ class MustaffGUI:
         self.ax.set_xticks([])
         self.ax.set_yticks([])
         for spine in self.ax.spines.values():
-            spine.set_color("#333")
+            spine.set_color("#cccccc")
 
         self.static_canvas = FigureCanvasTkAgg(self.fig, master=self._preview_container)
         self.static_widget = self.static_canvas.get_tk_widget()
@@ -255,14 +296,30 @@ class MustaffGUI:
         # 交互式音游预览（初始隐藏）
         self.preview_canvas: Optional[PreviewCanvas] = None
 
-    def _toggle_adv(self, frame):
-        self._adv_expanded = not self._adv_expanded
-        if self._adv_expanded:
-            self._adv_content.pack(fill="x", pady=5)
-            self._adv_toggle_btn.config(text="▼ 高级选项")
+    def _on_canvas_resize(self, event):
+        self._left_canvas.itemconfig(self._canvas_window, width=event.width)
+
+    def _bind_mousewheel(self):
+        self._left_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self._left_canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self._left_canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_mousewheel(self):
+        self._left_canvas.unbind_all("<MouseWheel>")
+        self._left_canvas.unbind_all("<Button-4>")
+        self._left_canvas.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event):
+        if event.num == 4:
+            self._left_canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self._left_canvas.yview_scroll(1, "units")
         else:
-            self._adv_content.pack_forget()
-            self._adv_toggle_btn.config(text="▶ 高级选项")
+            self._left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _open_url(self, url: str):
+        import webbrowser
+        webbrowser.open(url)
 
     def _log(self, message: str):
         self.log_text.config(state="normal")
@@ -496,23 +553,6 @@ class MustaffGUI:
             return
         self._draw_preview()
 
-    @staticmethod
-    def _lane_colors(keys: int) -> list:
-        palettes = {
-            4: ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A"],
-            6: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#A78BFA", "#FFA07A"],
-            7: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#6C5CE7", "#A78BFA", "#FFA07A"],
-        }
-        if keys in palettes:
-            return palettes[keys]
-        import colorsys
-        colors = []
-        for i in range(keys):
-            hue = (i / keys) * 0.85
-            r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
-            colors.append(f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}")
-        return colors
-
     def _draw_preview(self):
         self.ax.clear()
 
@@ -525,13 +565,13 @@ class MustaffGUI:
         import numpy as np
         from matplotlib.patches import Patch
 
-        lane_colors_bg = ["#1a1a2e", "#16213e"]
-        lane_colors_notes = self._lane_colors(keys)
+        lane_colors_bg = ["#f0f0f0", "#e8e8e8"]
+        lane_colors_notes = lane_colors(keys)
 
         for i in range(keys):
             self.ax.axhspan(i - 0.5, i + 0.5, color=lane_colors_bg[i % 2], alpha=0.3, zorder=0)
         for i in range(keys + 1):
-            self.ax.axhline(i - 0.5, color="#444", linewidth=0.5, zorder=1)
+            self.ax.axhline(i - 0.5, color="#cccccc", linewidth=0.5, zorder=1)
 
         max_time_s = duration_ms / 1000.0 if duration_ms else 0.0
         if max_time_s <= 0 and notes:
@@ -540,7 +580,7 @@ class MustaffGUI:
         if max_time_s > 0:
             grid_spacing = 1 if max_time_s <= 30 else (5 if max_time_s <= 120 else 10)
             for t in np.arange(0, max_time_s + grid_spacing, grid_spacing):
-                self.ax.axvline(t, color="#555", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
+                self.ax.axvline(t, color="#cccccc", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
 
         hit_by_col: dict = {}
         hold_segments = []
@@ -576,26 +616,27 @@ class MustaffGUI:
             )
 
         self.ax.set_yticks(range(keys))
-        self.ax.set_yticklabels([f"Key {i+1}" for i in range(keys)], color="white")
+        self.ax.set_yticklabels([f"Key {i+1}" for i in range(keys)], color="black")
         self.ax.set_ylim(-0.6, keys - 0.4)
         self.ax.invert_yaxis()
 
         if max_time_s > 0:
             self.ax.set_xlim(0, max_time_s)
 
-        self.ax.set_xlabel("Time (s)", fontsize=10, color="white")
-        self.ax.set_facecolor("#0f0f1a")
-        self.ax.tick_params(colors="white", labelsize=8)
-        self.ax.xaxis.label.set_color("white")
-        self.ax.spines["bottom"].set_color("#555")
-        self.ax.spines["left"].set_color("#555")
+        self.ax.set_xlabel("Time (s)", fontsize=10, color="black")
+        self.ax.set_facecolor("white")
+        self.ax.tick_params(colors="black", labelsize=8)
+        self.ax.xaxis.label.set_color("black")
+        self.ax.yaxis.label.set_color("black")
+        self.ax.spines["bottom"].set_color("#cccccc")
+        self.ax.spines["left"].set_color("#cccccc")
         self.ax.spines["top"].set_visible(False)
         self.ax.spines["right"].set_visible(False)
 
         hit_count = sum(len(t) for t, _ in hit_by_col.values())
         hold_count = len(hold_segments)
         info = f"Keys: {keys}  |  Notes: {hit_count} hits + {hold_count} holds = {len(notes)} total"
-        self.ax.set_title(f"{title} [{keys}K]\n{info}", fontsize=max(8, int(11*s)), color="white", pad=int(8*s))
+        self.ax.set_title(f"{title} [{keys}K]\n{info}", fontsize=max(8, int(11*s)), color="black", pad=int(8*s))
 
         legend_elements = []
         for i in range(min(keys, len(lane_colors_notes))):
@@ -607,8 +648,8 @@ class MustaffGUI:
         )
         legend = self.ax.legend(
             handles=legend_elements, loc="upper right",
-            facecolor="#1a1a2e", edgecolor="#555",
-            labelcolor="white", fontsize=7, ncol=2,
+            facecolor="white", edgecolor="#cccccc",
+            labelcolor="black", fontsize=7, ncol=2,
         )
         try:
             legend.legend_handles[-1].set_alpha(0.5)

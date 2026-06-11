@@ -12,6 +12,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import List, Dict, Any, Optional, Set
 import os
+import bisect
+from ..colors import lane_colors as get_lane_colors
 
 # pygame 用于音频播放
 try:
@@ -148,21 +150,15 @@ class AudioPlayer:
 class PreviewCanvas(tk.Canvas):
     """音游预览画布：下落式音符渲染 + 自动打击 + 时间轴"""
 
-    # 配色
-    BG_COLOR = "#0f0f1a"
-    LANE_COLORS = ["#141428", "#1a1a35"]
-    LANE_LINE_COLOR = "#333355"
-    JUDGE_LINE_COLOR = "#00e5ff"
-    HIT_EFFECT_COLOR = "#ffffff"
-    TIMELINE_BG = "#222240"
-    TIMELINE_FG = "#4FC3F7"
-    TEXT_COLOR = "#cccccc"
-
-    LANE_PALETTES = {
-        4: ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A"],
-        6: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#A78BFA", "#FFA07A"],
-        7: ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#6C5CE7", "#A78BFA", "#FFA07A"],
-    }
+    # 配色 (Light)
+    BG_COLOR = "#f0f0f0"
+    LANE_COLORS = ["#e0e0e0", "#d4d4d4"]
+    LANE_LINE_COLOR = "#cccccc"
+    JUDGE_LINE_COLOR = "#0078d4"
+    HIT_EFFECT_COLOR = "#000000"
+    TIMELINE_BG = "#e0e0e0"
+    TIMELINE_FG = "#0078d4"
+    TEXT_COLOR = "#000000"
 
     def __init__(
         self,
@@ -180,17 +176,18 @@ class PreviewCanvas(tk.Canvas):
         self.player = audio_player
         self._scale = scale
 
-        # 渲染参数
+        self._sorted_times = sorted(n["time"] for n in notes)
+        self._note_indices_by_time = sorted(range(len(notes)), key=lambda i: notes[i]["time"])
+
         self.lane_width = int(70 * scale)
         self.fall_speed = int(350 * scale)
         self.hit_disappear_ms = 120
 
-        # 动画状态
         self._running = False
-        self._hit_effects: List[Dict[str, Any]] = []  # 活跃打击效果
-        self._hit_set: Set[int] = set()  # 已打击的音符索引
-        self._note_items: List[int] = []  # Canvas item IDs
-        self._effect_items: List[int] = []  # 效果 item IDs
+        self._hit_effects: List[Dict[str, Any]] = []
+        self._hit_set: Set[int] = set()
+        self._note_items: List[int] = []
+        self._effect_items: List[int] = []
 
         # 时间轴拖拽
         self._dragging_timeline = False
@@ -230,17 +227,6 @@ class PreviewCanvas(tk.Canvas):
             return
         self._on_resize()
         self._bind_events()
-
-    def _lane_colors(self) -> list:
-        if self.keys in self.LANE_PALETTES:
-            return self.LANE_PALETTES[self.keys]
-        import colorsys
-        colors = []
-        for i in range(self.keys):
-            hue = (i / self.keys) * 0.85
-            r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
-            colors.append(f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}")
-        return colors
 
     def _on_resize(self, event=None):
         new_w = self.winfo_width()
@@ -340,7 +326,7 @@ class PreviewCanvas(tk.Canvas):
         self._play_btn = self.create_rectangle(
             self.canvas_width // 2 - int(30*s), btn_y,
             self.canvas_width // 2 + int(30*s), btn_y + int(25*s),
-            fill="#2a2a4a", outline="#555", width=1, tags="btn"
+            fill=self.JUDGE_LINE_COLOR, outline="#005a9e", width=1, tags="btn"
         )
         self._play_text = self.create_text(
             self.canvas_width // 2, btn_y + int(12*s),
@@ -455,10 +441,15 @@ class PreviewCanvas(tk.Canvas):
         view_top_ms = current_ms - int(200 * self._scale)
         view_bottom_ms = current_ms + self.view_window_ms
 
-        lane_colors = self._lane_colors()
+        lane_colors = get_lane_colors(self.keys)
         playing = self.player is not None and not self.player._paused
 
-        for idx, note in enumerate(self.notes):
+        start_idx = bisect.bisect_left(self._sorted_times, view_top_ms)
+        end_idx = bisect.bisect_right(self._sorted_times, view_bottom_ms)
+
+        for pos in range(start_idx, end_idx):
+            idx = self._note_indices_by_time[pos]
+            note = self.notes[idx]
             note_time = note["time"]
             col = note["column"]
             note_type = note.get("type", "hit")
@@ -518,12 +509,12 @@ class PreviewCanvas(tk.Canvas):
                     self._spawn_hit_effect(col)
 
             if note_type == "hold" and end_time:
-                if idx + 100000 not in self._hit_set:
+                hold_end_key = ("hold_end", idx)
+                if hold_end_key not in self._hit_set:
                     if current_ms >= end_time and current_ms <= end_time + 80:
-                        self._hit_set.add(idx + 100000)
+                        self._hit_set.add(hold_end_key)
                         self._spawn_hit_effect(col, is_hold_end=True)
 
-        # 7. 更新打击效果
         self._update_hit_effects()
 
     def _update_time_text(self, current_ms: float):
@@ -546,7 +537,7 @@ class PreviewCanvas(tk.Canvas):
     def _spawn_hit_effect(self, col: int, is_hold_end: bool = False):
         cx = self.lane_offset_x + col * self.lane_width + self.lane_width // 2
         cy = self.judge_line_y
-        lane_colors = self._lane_colors()
+        lane_colors = get_lane_colors(self.keys)
         base_color = lane_colors[col % len(lane_colors)]
         color = base_color if not is_hold_end else "#ffffff"
         s = self._scale
@@ -598,6 +589,8 @@ class PreviewCanvas(tk.Canvas):
         """设置新的音符数据"""
         self.notes = notes
         self.duration_ms = duration_ms
+        self._sorted_times = sorted(n["time"] for n in notes)
+        self._note_indices_by_time = sorted(range(len(notes)), key=lambda i: notes[i]["time"])
         self._hit_set.clear()
         self._hit_effects.clear()
 
