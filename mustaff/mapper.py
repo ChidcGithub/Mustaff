@@ -22,6 +22,9 @@ class BeatMapper:
         snap_resolution: int = 8,
         complexity: float = 1.0,
         ln_tendency: float = 0.5,
+        speed_variation: float = 0.5,
+        speed_smoothing: int = 5,
+        contrast: float = 1.0,
     ):
         self.keys = keys
         self.min_pitch = min_pitch
@@ -38,6 +41,9 @@ class BeatMapper:
         self.snap_resolution = snap_resolution
         self.complexity = complexity
         self.ln_tendency = ln_tendency
+        self.speed_variation = max(0.0, min(1.0, speed_variation))
+        self.speed_smoothing = max(1, speed_smoothing)
+        self.contrast = max(0.1, min(3.5, contrast))
 
     def map_notes(
         self,
@@ -75,6 +81,8 @@ class BeatMapper:
 
         if self.snap_to_beat and beat_subdivisions is not None and len(beat_subdivisions) > 0:
             notes = self._snap_notes(notes, beat_subdivisions)
+
+        self._calculate_speeds(notes, sorted_features, valid_positions)
 
         result = [None] * n
         for i, note in enumerate(notes):
@@ -336,6 +344,10 @@ class BeatMapper:
         avg_ratio = avg_rms / rms_base
         min_ratio = min_rms / rms_base
         energy_score = avg_ratio * 0.6 + min_ratio * 0.4
+
+        # 对比度调整能量分数
+        energy_score = np.clip((energy_score - 0.5) * self.contrast + 0.5, 0.0, 1.0)
+
         stability = 0.5
         if pitches_slice is not None and len(pitches_slice) > 0:
             valid_p = pitches_slice[~np.isnan(pitches_slice)]
@@ -343,6 +355,63 @@ class BeatMapper:
                 p_std = float(np.std(valid_p))
                 stability = 1.0 - min(p_std / 12.0, 1.0)
         return energy_score * 0.7 + stability * 0.3
+
+    def _calculate_speeds(
+        self,
+        notes: List[Dict[str, Any]],
+        features: List[Dict[str, Any]],
+        valid_positions: List[int],
+    ) -> None:
+        """根据能量和密度动态计算每个音符的下落速度（原地修改 notes）"""
+        if not notes or self.speed_variation == 0.0:
+            return
+
+        n = len(notes)
+        variation = self.speed_variation
+
+        # 因子 1: 能量 (RMS)
+        rms_values = np.array([features[valid_positions[i]]["rms"] for i in range(min(n, len(valid_positions)))])
+        if len(rms_values) < n:
+            rms_values = np.pad(rms_values, (0, n - len(rms_values)))
+        rms_min = float(np.min(rms_values))
+        rms_range = float(np.max(rms_values)) - rms_min
+        if rms_range < 1e-6:
+            energy_norm = np.zeros(n)
+        else:
+            energy_norm = (rms_values - rms_min) / rms_range
+
+        # 对比度：居中缩放能量分布
+        energy_norm = np.clip((energy_norm - 0.5) * self.contrast + 0.5, 0.0, 1.0)
+
+        energy_factors = 0.7 + 0.6 * energy_norm  # [0.7, 1.3]
+
+        # 因子 2: 局部密度 (±500ms 内的音符数)
+        times = np.array([note["time"] for note in notes], dtype=float)
+        density_window_ms = 500.0
+        density_factors = np.ones(n)
+        for i in range(n):
+            t = times[i]
+            count = int(np.sum((times >= t - density_window_ms) & (times <= t + density_window_ms))) - 1
+            density_norm = min(count / 10.0, 1.0)  # 10个音符=满密度
+            density_factors[i] = 1.0 - 0.2 * density_norm  # [0.8, 1.0]
+
+        # 组合
+        raw_speeds = 10.0 * energy_factors * density_factors
+
+        # 缩放变化幅度
+        raw_speeds = 10.0 + (raw_speeds - 10.0) * variation
+
+        # 因子 3: 滑动平均平滑
+        window = self.speed_smoothing
+        if window > 1 and n >= window:
+            kernel = np.ones(window) / window
+            padded = np.pad(raw_speeds, (window // 2, window // 2), mode="edge")
+            smoothed = np.convolve(padded, kernel, mode="valid")
+            raw_speeds[:len(smoothed)] = smoothed[:n]
+
+        # 写入 note["speed"]，保留两位小数
+        for i, note in enumerate(notes):
+            note["speed"] = round(float(raw_speeds[i]), 2)
 
     def _generate_notes(
         self,
@@ -378,6 +447,11 @@ class BeatMapper:
             time_ms = feat["time_ms"]
             column = assignments[idx]
             rms = feat["rms"]
+
+            # 对比度调整 RMS
+            rms_norm = rms / rms_max if rms_max > 0 else 0.0
+            rms_contrasted = np.clip((rms_norm - 0.5) * self.contrast + 0.5, 0.0, 1.0)
+            rms = rms_contrasted * rms_max
 
             if self.hold_position_strength > 0:
                 norm = (time_ms - t_min) / t_range

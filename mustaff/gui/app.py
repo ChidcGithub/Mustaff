@@ -386,14 +386,14 @@ class MustaffGUI:
 
         export_row = ttk.Frame(btn_frame)
         export_row.pack(fill="x", pady=int(2*s))
-        self.format_var = tk.StringVar(value="both")
-        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "csv", "both"], width=6, state="readonly").pack(side="left")
+        self.format_var = tk.StringVar(value="all")
+        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "csv", "all"], width=6, state="readonly").pack(side="left")
         self.export_btn = ttk.Button(export_row, text="导出", command=self._export, state="disabled")
         self.export_btn.pack(side="right", fill="x", expand=True, padx=(int(4*s), 0))
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.3.4", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.4.0", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
@@ -775,7 +775,7 @@ class MustaffGUI:
 
         # CSV 导出需要选择时间单位
         csv_time_unit = "seconds"
-        if fmt in ("csv", "both"):
+        if fmt in ("csv", "all"):
             chosen = self._ask_time_unit()
             if chosen is None:
                 return
@@ -795,7 +795,7 @@ class MustaffGUI:
             export_futs = []
 
             with ThreadPoolExecutor(max_workers=3) as ex:
-                if fmt in ("osu", "both"):
+                if fmt in ("osu", "all"):
                     _osu_exporter = OsuManiaExporter(
                         notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,
@@ -804,7 +804,7 @@ class MustaffGUI:
                     _osu_path = os.path.join(self.output_dir, f"{base_name}.osu")
                     export_futs.append(("osu", _osu_path, ex.submit(_osu_exporter.export, _osu_path)))
 
-                if fmt in ("json", "both"):
+                if fmt in ("json", "all"):
                     _json_exporter = JsonExporter(
                         notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,
@@ -812,7 +812,7 @@ class MustaffGUI:
                     _json_path = os.path.join(self.output_dir, f"{base_name}.json")
                     export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
 
-                if fmt in ("csv", "both"):
+                if fmt in ("csv", "all"):
                     _csv_exporter = CsvExporter(
                         notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,

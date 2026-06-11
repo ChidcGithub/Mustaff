@@ -11,6 +11,7 @@ from .analyzer import AudioAnalyzer
 from .mapper import BeatMapper
 from .exporters.osu_mania import OsuManiaExporter
 from .exporters.json_exporter import JsonExporter
+from .exporters.csv_exporter import CsvExporter
 from .preview import generate_preview
 
 
@@ -51,7 +52,8 @@ class ProgressSpinner:
 @click.command()
 @click.argument("input_file", type=click.Path(exists=True, dir_okay=False))
 @click.option("--output-dir", "-o", default=".", help="输出目录")
-@click.option("--format", "-f", type=click.Choice(["osu", "json", "both"], case_sensitive=False), default="both", help="输出格式")
+@click.option("--format", "-f", type=click.Choice(["osu", "json", "csv", "all"], case_sensitive=False), default="all", help="输出格式")
+@click.option("--csv-time-unit", type=click.Choice(["seconds", "milliseconds"], case_sensitive=False), default="seconds", help="CSV 导出时间单位", show_default=True)
 @click.option("--keys", "-k", type=click.IntRange(1, 9), default=4, help="轨道数 (1-9)")
 @click.option("--title", "-t", default=None, help="歌曲标题（默认使用文件名）")
 @click.option("--artist", "-a", default="Unknown Artist", help="艺术家")
@@ -69,6 +71,7 @@ class ProgressSpinner:
 @click.option("--max-bpm", default=200.0, help="最大 BPM", show_default=True)
 @click.option("--complexity", default=1.0, help="谱面复杂度 (0.5-2.0)", show_default=True)
 @click.option("--ln-tendency", default=0.5, help="长音倾向 (0=尽量少, 1=尽量多)", show_default=True)
+@click.option("--contrast", default=1.0, help="能量对比度 (0.1-3.5)", show_default=True)
 def main(
     input_file: str,
     output_dir: str,
@@ -90,6 +93,8 @@ def main(
     max_bpm: float,
     complexity: float,
     ln_tendency: float,
+    csv_time_unit: str,
+    contrast: float,
 ):
     """Mustaff - 从音频自动生成音游曲谱
 
@@ -136,6 +141,7 @@ def main(
         snap_resolution=int(snap_resolution),
         complexity=complexity,
         ln_tendency=ln_tendency,
+        contrast=contrast,
     )
     notes = mapper.map_notes(
         features, beat_subdivisions=beat_subdivisions,
@@ -148,7 +154,7 @@ def main(
     base_name = os.path.splitext(os.path.basename(input_file))[0]
 
     export_tasks = []
-    if format in ("osu", "both"):
+    if format in ("osu", "all"):
         osu_path = os.path.join(output_dir, f"{base_name}.osu")
         export_tasks.append(("osu", osu_path, lambda p=osu_path: _export_osu(
             notes=notes, bpm=analyzer.tempo, keys=keys,
@@ -156,11 +162,19 @@ def main(
             audio_filename=os.path.basename(input_file), path=p,
         )))
 
-    if format in ("json", "both"):
+    if format in ("json", "all"):
         json_path = os.path.join(output_dir, f"{base_name}.json")
         export_tasks.append(("json", json_path, lambda p=json_path: _export_json(
             notes=notes, bpm=analyzer.tempo, keys=keys,
             title=title, artist=artist, version=difficulty, path=p,
+        )))
+
+    if format in ("csv", "all"):
+        csv_path = os.path.join(output_dir, f"{base_name}.csv")
+        export_tasks.append(("csv", csv_path, lambda p=csv_path: _export_csv(
+            notes=notes, bpm=analyzer.tempo, keys=keys,
+            title=title, artist=artist, version=difficulty,
+            time_unit=csv_time_unit, path=p,
         )))
 
     if len(export_tasks) > 1:
@@ -210,6 +224,14 @@ def _export_json(notes, bpm, keys, title, artist, version, path):
     JsonExporter(
         notes=notes, bpm=bpm, offset=0.0, keys=keys,
         title=title, artist=artist, version=version,
+    ).export(path)
+
+
+def _export_csv(notes, bpm, keys, title, artist, version, time_unit, path):
+    CsvExporter(
+        notes=notes, bpm=bpm, offset=0.0, keys=keys,
+        title=title, artist=artist, version=version,
+        time_unit=time_unit,
     ).export(path)
 
 
