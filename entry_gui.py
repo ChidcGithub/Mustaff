@@ -6,13 +6,18 @@ import ctypes
 import sys
 
 if sys.platform == "win32":
+    # PerMonitorV2 = per-monitor DPI with automatic scaling
+    # Windows 10 1607+ (Anniversary Update)
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
-            pass
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 from mustaff.gui.app import run_gui
 

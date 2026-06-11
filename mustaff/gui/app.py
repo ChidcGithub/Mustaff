@@ -86,26 +86,20 @@ class MustaffGUI:
         import platform
         system = platform.system()
         if system == "Windows":
+            import ctypes
             try:
-                import ctypes
                 hdc = ctypes.windll.user32.GetDC(0)
                 dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
                 ctypes.windll.user32.ReleaseDC(0, hdc)
             except Exception:
                 dpi = 96
-        elif system == "Darwin":
-            try:
-                dpi = int(self.root.tk.call("tk", "scaling") * 72)
-            except Exception:
-                dpi = 96
         else:
             try:
-                dpi = int(self.root.tk.call("tk", "scaling") * 72)
+                dpi = int(float(self.root.tk.call("tk", "scaling")) * 72)
             except Exception:
                 dpi = 96
         scale = dpi / 96.0
-        if scale > 1.25:
-            self.root.tk.call("tk", "scaling", dpi / 72.0)
+        self.root.tk.call("tk", "scaling", dpi / 72.0)
         return scale
 
     def _init_taskbar(self):
