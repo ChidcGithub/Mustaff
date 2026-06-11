@@ -60,6 +60,7 @@ class JsonExporter(BaseExporter):
                     "column": n["column"],
                     "type": n["type"],
                     "end_time": n.get("end_time"),
+                    "speed": n.get("speed", 10.0),
                 }
                 for n in self.notes
             ],

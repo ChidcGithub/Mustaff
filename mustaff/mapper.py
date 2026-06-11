@@ -423,6 +423,7 @@ class BeatMapper:
                 "column": column,
                 "type": note_type,
                 "end_time": end_time,
+                "speed": 10.0,
             })
 
         notes.sort(key=lambda x: x["time"])

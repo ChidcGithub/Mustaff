@@ -5,7 +5,7 @@ Mustaff - 自动从音频生成音游曲谱
 自动生成音游（如 osu!mania）曲谱。
 """
 
-__version__ = "0.3.2"
+__version__ = "0.3.4"
 
 from .analyzer import AudioAnalyzer
 from .mapper import BeatMapper

@@ -37,6 +37,8 @@ from ..exporters.osu_mania import OsuManiaExporter
 from ..exporters.json_exporter import JsonExporter
 from ..importers.json_importer import JsonImporter
 from ..importers.osu_importer import OsuImporter
+from ..importers.csv_importer import CsvImporter
+from ..exporters.csv_exporter import CsvExporter
 from ..colors import lane_colors
 from .preview_player import PreviewCanvas, AudioPlayer
 
@@ -385,13 +387,13 @@ class MustaffGUI:
         export_row = ttk.Frame(btn_frame)
         export_row.pack(fill="x", pady=int(2*s))
         self.format_var = tk.StringVar(value="both")
-        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "both"], width=6, state="readonly").pack(side="left")
+        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "csv", "both"], width=6, state="readonly").pack(side="left")
         self.export_btn = ttk.Button(export_row, text="导出", command=self._export, state="disabled")
         self.export_btn.pack(side="right", fill="x", expand=True, padx=(int(4*s), 0))
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.3.2", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.3.4", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
@@ -489,13 +491,39 @@ class MustaffGUI:
             self.output_dir = path
             self.out_label.config(text=path)
 
+    def _ask_time_unit(self):
+        """弹窗让用户选择 CSV 时间单位，返回 'seconds' 或 None（取消）"""
+        result = {"value": None}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择时间单位")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        s = self._scale
+        ttk.Label(dialog, text="CSV 中时间的单位：").pack(padx=int(12*s), pady=int(8*s))
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(padx=int(12*s), pady=int(4*s))
+
+        def choose(unit):
+            result["value"] = unit
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="秒 (seconds)", command=lambda: choose("seconds")).pack(side="left", padx=int(4*s))
+        ttk.Button(btn_frame, text="毫秒 (milliseconds)", command=lambda: choose("milliseconds")).pack(side="left", padx=int(4*s))
+
+        self.root.wait_window(dialog)
+        return result["value"]
+
     def _import_chart(self):
         path = filedialog.askopenfilename(
             title="导入谱面文件",
             filetypes=[
-                ("谱面文件", "*.json *.osu"),
+                ("谱面文件", "*.json *.osu *.csv"),
                 ("JSON", "*.json"),
                 ("OSU", "*.osu"),
+                ("CSV", "*.csv"),
                 ("所有文件", "*.*"),
             ],
         )
@@ -508,6 +536,11 @@ class MustaffGUI:
                 importer = JsonImporter(path)
             elif ext == ".osu":
                 importer = OsuImporter(path)
+            elif ext == ".csv":
+                time_unit = self._ask_time_unit()
+                if time_unit is None:
+                    return
+                importer = CsvImporter(path, time_unit=time_unit)
             else:
                 messagebox.showerror("错误", f"不支持的文件格式: {ext}")
                 return
@@ -739,6 +772,15 @@ class MustaffGUI:
             return
 
         fmt = self.format_var.get()
+
+        # CSV 导出需要选择时间单位
+        csv_time_unit = "seconds"
+        if fmt in ("csv", "both"):
+            chosen = self._ask_time_unit()
+            if chosen is None:
+                return
+            csv_time_unit = chosen
+
         base_name = self.current_title
         difficulty = self.diff_var.get()
         audio_basename = os.path.basename(self.current_audio_path) if self.current_audio_path else ""
@@ -752,7 +794,7 @@ class MustaffGUI:
             from concurrent.futures import ThreadPoolExecutor
             export_futs = []
 
-            with ThreadPoolExecutor(max_workers=2) as ex:
+            with ThreadPoolExecutor(max_workers=3) as ex:
                 if fmt in ("osu", "both"):
                     _osu_exporter = OsuManiaExporter(
                         notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
@@ -769,6 +811,15 @@ class MustaffGUI:
                     )
                     _json_path = os.path.join(self.output_dir, f"{base_name}.json")
                     export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
+
+                if fmt in ("csv", "both"):
+                    _csv_exporter = CsvExporter(
+                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        title=base_name, artist=self.current_artist, version=difficulty,
+                        time_unit=csv_time_unit,
+                    )
+                    _csv_path = os.path.join(self.output_dir, f"{base_name}.csv")
+                    export_futs.append(("csv", _csv_path, ex.submit(_csv_exporter.export, _csv_path)))
 
                 for name, path, fut in export_futs:
                     fut.result()

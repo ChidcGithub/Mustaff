@@ -117,6 +117,7 @@ class OsuImporter:
                                 "column": col,
                                 "type": "hold",
                                 "end_time": end_time,
+                                "speed": 10.0,
                             })
                         else:
                             # Hit note: type 1
@@ -125,6 +126,7 @@ class OsuImporter:
                                 "column": col,
                                 "type": "hit",
                                 "end_time": None,
+                                "speed": 10.0,
                             })
                     except (ValueError, IndexError):
                         continue

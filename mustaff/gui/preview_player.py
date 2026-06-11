@@ -475,17 +475,19 @@ class PreviewCanvas(tk.Canvas):
             if not visible:
                 continue
 
-            def time_to_y(t: float) -> float:
+            def time_to_y(t: float, speed: float = 10.0) -> float:
                 dt = (t - current_ms) / 1000.0
-                return self.judge_line_y - dt * self.fall_speed
+                effective_speed = self.fall_speed * (speed / 10.0)
+                return self.judge_line_y - dt * effective_speed
 
             s = self._scale
             x0 = self.lane_offset_x + col * self.lane_width + int(4*s)
             x1 = self.lane_offset_x + (col + 1) * self.lane_width - int(4*s)
+            note_speed = note.get("speed", 10.0)
 
             if note_type == "hold" and end_time:
-                y_head = time_to_y(note_time)
-                y_tail = time_to_y(end_time)
+                y_head = time_to_y(note_time, note_speed)
+                y_tail = time_to_y(end_time, note_speed)
                 y_head = max(int(-20*s), min(self.canvas_height + int(20*s), y_head))
                 y_tail = max(int(-20*s), min(self.canvas_height + int(20*s), y_tail))
 
@@ -500,7 +502,7 @@ class PreviewCanvas(tk.Canvas):
                 )
                 self._note_items.append(item)
             else:
-                y = time_to_y(note_time)
+                y = time_to_y(note_time, note_speed)
                 if int(-20*s) <= y <= self.canvas_height + int(20*s):
                     outline_color = lighten_color(note_color, 0.3)
                     item = self.create_rectangle(

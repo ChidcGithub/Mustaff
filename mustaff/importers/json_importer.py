@@ -44,6 +44,7 @@ class JsonImporter:
                 "column": int(n["column"]),
                 "type": n.get("type", "hit"),
                 "end_time": int(n["end_time"]) if n.get("end_time") is not None else None,
+                "speed": float(n.get("speed", 10.0)),
             }
             self.notes.append(note)
 
