@@ -408,7 +408,7 @@ class MustaffGUI:
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.4.4", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.4.5", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", max(7, int(8*s)))).pack(anchor="center")
