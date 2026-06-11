@@ -269,15 +269,17 @@ class MustaffGUI:
 
         file_frame = ttk.LabelFrame(inner, text="音频文件", padding=int(10*s))
         file_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        file_frame.columnconfigure(0, weight=1)
         self.file_label = ttk.Label(file_frame, text="未选择文件", foreground="gray")
-        self.file_label.pack(side="left", fill="x", expand=True)
-        ttk.Button(file_frame, text="浏览...", command=self._browse_file).pack(side="right")
+        self.file_label.grid(row=0, column=0, sticky="ew", padx=(0, int(5*s)))
+        ttk.Button(file_frame, text="浏览...", command=self._browse_file).grid(row=0, column=1)
 
         import_frame = ttk.LabelFrame(inner, text="导入谱面", padding=int(10*s))
         import_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        import_frame.columnconfigure(0, weight=1)
         self.import_label = ttk.Label(import_frame, text="未导入谱面", foreground="gray")
-        self.import_label.pack(side="left", fill="x", expand=True)
-        ttk.Button(import_frame, text="导入...", command=self._import_chart).pack(side="right")
+        self.import_label.grid(row=0, column=0, sticky="ew", padx=(0, int(5*s)))
+        ttk.Button(import_frame, text="导入...", command=self._import_chart).grid(row=0, column=1)
 
         param_frame = ttk.LabelFrame(inner, text="谱面参数", padding=int(10*s))
         param_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
@@ -374,9 +376,10 @@ class MustaffGUI:
 
         out_frame = ttk.LabelFrame(inner, text="输出目录", padding=int(10*s))
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        out_frame.columnconfigure(0, weight=1)
         self.out_label = ttk.Label(out_frame, text=os.getcwd(), foreground="gray")
-        self.out_label.pack(side="left", fill="x", expand=True)
-        ttk.Button(out_frame, text="更改...", command=self._browse_out).pack(side="right")
+        self.out_label.grid(row=0, column=0, sticky="ew", padx=(0, int(5*s)))
+        ttk.Button(out_frame, text="更改...", command=self._browse_out).grid(row=0, column=1)
 
         prog_frame = ttk.LabelFrame(inner, text="进度", padding=int(5*s))
         prog_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
@@ -494,7 +497,9 @@ class MustaffGUI:
         )
         if path:
             self.input_path = path
-            self.file_label.config(text=os.path.basename(path), foreground="black")
+            basename = os.path.basename(path)
+            display = basename if len(basename) <= 40 else basename[:37] + "..."
+            self.file_label.config(text=display, foreground="black")
             self._log(f"已选择: {path}")
 
     def _browse_out(self):
@@ -571,7 +576,11 @@ class MustaffGUI:
 
             self.keys_var.set(info["keys"])
             self.diff_var.set(info["version"])
-            self.import_label.config(text=os.path.basename(path), foreground="black")
+            basename = os.path.basename(path)
+            self.import_label.config(
+                text=(basename if len(basename) <= 40 else basename[:37] + "..."),
+                foreground="black",
+            )
             self._log(f"导入谱面: {path}")
             self._log(f"  标题: {info['title']} - {info['artist']}")
             self._log(f"  BPM: {info['bpm']}, Keys: {info['keys']}, 音符数: {len(info['notes'])}")
