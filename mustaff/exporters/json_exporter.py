@@ -57,7 +57,8 @@ class JsonExporter(BaseExporter):
             "notes": [
                 {
                     "time": n["time"],
-                    "column": n["column"],
+                    "column": n.get("column"),
+                    "columns": n.get("columns"),
                     "type": n["type"],
                     "end_time": n.get("end_time"),
                     "speed": n.get("speed", 10.0),

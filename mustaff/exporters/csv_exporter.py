@@ -60,7 +60,6 @@ class CsvExporter(BaseExporter):
 
         # N 行: N,类型,时长,速度,到达判定线时间,轨道
         for n in self.notes:
-            note_type_val = 1 if n["type"] == "hold" else 0
             speed = n.get("speed", 10.0)
 
             if self.time_unit == "seconds":
@@ -76,9 +75,16 @@ class CsvExporter(BaseExporter):
                 else:
                     hold_duration = 1.0
 
-            lines.append(
-                f"N,{note_type_val},{hold_duration:.3f},{speed:.1f},{time_val:.3f},{n['column']}"
-            )
+            if n["type"] == "double_hit":
+                for col in n.get("columns", [n.get("column", 0)]):
+                    lines.append(
+                        f"N,0,{hold_duration:.3f},{speed:.1f},{time_val:.3f},{col}"
+                    )
+            else:
+                note_type_val = 1 if n["type"] == "hold" else 0
+                lines.append(
+                    f"N,{note_type_val},{hold_duration:.3f},{speed:.1f},{time_val:.3f},{n['column']}"
+                )
 
         return "\n".join(lines) + "\n"
 

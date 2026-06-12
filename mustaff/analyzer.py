@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, List, Optional
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from typing import Callable, List, Optional, Tuple
 import numpy as np
 import librosa
 
@@ -11,6 +12,14 @@ def _scalar(x):
 
 
 ProgressCallback = Callable[[int, str], None]
+
+
+def _process_pitch_segment(y, fmin, fmax, sr, hop_length, seg_start, seg_end):
+    """用于多进程音高检测的模块级函数"""
+    from librosa import pyin
+    y_seg = y[seg_start:seg_end]
+    p, _, probs = pyin(y_seg, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length)
+    return seg_start, p, probs
 
 
 class AudioAnalyzer:
@@ -40,6 +49,7 @@ class AudioAnalyzer:
         self.n_fft = n_fft
         self.min_bpm = min_bpm
         self.max_bpm = max_bpm
+        self.multi_process_pitch = multi_process_pitch
 
         self.y: Optional[np.ndarray] = None
         self.duration: float = 0.0
@@ -193,15 +203,49 @@ class AudioAnalyzer:
         )
 
     def _analyze_pitch(self) -> None:
-        pitches, voiced_flag, voiced_probs = librosa.pyin(
-            self.y,
-            fmin=self.fmin,
-            fmax=self.fmax,
-            sr=self.sr,
-            hop_length=self.hop_length,
-        )
-        self.pitches = pitches
-        self.pitch_confidences = voiced_probs
+        if not self.multi_process_pitch:
+            pitches, voiced_flag, voiced_probs = librosa.pyin(
+                self.y,
+                fmin=self.fmin,
+                fmax=self.fmax,
+                sr=self.sr,
+                hop_length=self.hop_length,
+            )
+            self.pitches = pitches
+            self.pitch_confidences = voiced_probs
+            return
+
+        n_workers = max(1, (os.cpu_count() or 4) - 1)
+        total_frames = (len(self.y) - 1) // self.hop_length + 1
+        overlap_frames = 64
+        seg_samples = max(self.hop_length * overlap_frames * 10, len(self.y) // max(n_workers, 1))
+
+        segments = []
+        start = 0
+        while start < len(self.y):
+            end = min(start + seg_samples + overlap_frames * self.hop_length, len(self.y))
+            segments.append((start, end))
+            start += seg_samples
+            if start >= len(self.y) - overlap_frames * self.hop_length:
+                break
+
+        all_pitches = np.full(total_frames, np.nan)
+        all_probs = np.zeros(total_frames)
+
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = [pool.submit(_process_pitch_segment, self.y, self.fmin, self.fmax, self.sr, self.hop_length, s, e) for s, e in segments]
+            for fut in as_completed(futures):
+                seg_start, p, probs = fut.result()
+                seg_frame_start = seg_start // self.hop_length
+                seg_len = min(len(p), total_frames - seg_frame_start)
+                for i in range(seg_len):
+                    global_i = seg_frame_start + i
+                    if np.isnan(all_pitches[global_i]) or (not np.isnan(p[i]) and probs[i] > all_probs[global_i]):
+                        all_pitches[global_i] = p[i]
+                        all_probs[global_i] = probs[i] if not np.isnan(probs[i]) else 0.0
+
+        self.pitches = all_pitches
+        self.pitch_confidences = all_probs
 
     def _analyze_rms(self) -> None:
         self.rms = librosa.feature.rms(

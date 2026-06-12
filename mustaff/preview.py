@@ -1,23 +1,18 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from .colors import lane_colors, LANE_PALETTES
 
 
-def generate_preview(
+def draw_preview_on_axes(
+    ax: Any,
+    fig: Any,
     notes: List[Dict[str, Any]],
     keys: int,
     duration_ms: Optional[float] = None,
     title: str = "Beatmap Preview",
-    figsize: tuple = (14, 5),
-    dpi: int = 150,
-    save_path: Optional[str] = None,
-) -> Any:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    scale: float = 1.0,
+) -> None:
     from matplotlib.patches import Patch
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
     lane_colors_bg = ["#f0f0f0", "#e8e8e8"]
     lane_colors_notes = lane_colors(keys)
@@ -44,29 +39,39 @@ def generate_preview(
         for t in np.arange(0, max_time_s + grid_spacing, grid_spacing):
             ax.axvline(t, color="#cccccc", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
 
-    hit_by_col: Dict[int, tuple] = {}
+    hit_by_col: Dict[int, Tuple[List, List]] = {}
     hold_segments = []
 
     for note in notes:
-        col = note["column"]
         t = note["time"] / 1000.0
-        if col < 0 or col >= keys:
-            col = col % keys
         note_type = note.get("type", "hit")
-        if note_type == "hold":
-            end_t = (note.get("end_time") or note["time"] + 200) / 1000.0
-            hold_segments.append((t, end_t, col))
+        if note_type == "double_hit":
+            cols = note.get("columns", [])
+            for col in cols:
+                if col < 0 or col >= keys:
+                    col = col % keys
+                hit_by_col.setdefault(col, ([], []))
+                hit_by_col[col][0].append(t)
+                hit_by_col[col][1].append(col)
         else:
-            hit_by_col.setdefault(col, ([], []))
-            hit_by_col[col][0].append(t)
-            hit_by_col[col][1].append(col)
+            col = note["column"]
+            if col < 0 or col >= keys:
+                col = col % keys
+            if note_type == "hold":
+                end_t = (note.get("end_time") or note["time"] + 200) / 1000.0
+                hold_segments.append((t, end_t, col))
+            else:
+                hit_by_col.setdefault(col, ([], []))
+                hit_by_col[col][0].append(t)
+                hit_by_col[col][1].append(col)
 
+    s = scale
     for col, (times, cols) in hit_by_col.items():
         color = lane_colors_notes[col % len(lane_colors_notes)]
         ax.scatter(
             times, cols,
-            c=color, s=35, alpha=0.9, zorder=3,
-            edgecolors="white", linewidths=0.5,
+            c=color, s=max(20, int(35 * s)), alpha=0.9, zorder=3,
+            edgecolors="white", linewidths=max(0.3, 0.5 * s),
         )
 
     for start_t, end_t, col in hold_segments:
@@ -126,6 +131,23 @@ def generate_preview(
             legend.legendHandles[-1].set_alpha(0.5)
         except (AttributeError, IndexError):
             pass
+
+
+def generate_preview(
+    notes: List[Dict[str, Any]],
+    keys: int,
+    duration_ms: Optional[float] = None,
+    title: str = "Beatmap Preview",
+    figsize: tuple = (14, 5),
+    dpi: int = 150,
+    save_path: Optional[str] = None,
+) -> Any:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    draw_preview_on_axes(ax, fig, notes, keys, duration_ms, title)
 
     plt.tight_layout()
 

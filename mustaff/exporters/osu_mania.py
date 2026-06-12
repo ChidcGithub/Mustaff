@@ -104,13 +104,17 @@ class OsuManiaExporter(BaseExporter):
         # SV 变速时间点（inherited / 绿线）
         # 公式：inherited_beatLength = -1000.0 / speed
         # 只在速度变化时插入，合并连续相同速度
+        # 同时刻去重：取第一个音符的速度
         last_speed = None
+        last_time = -1
         for note in self.notes:
             speed = note.get("speed", 10.0)
-            if speed != last_speed:
+            note_time = int(note['time'])
+            if note_time != last_time and speed != last_speed:
                 inherited_beat_length = -1000.0 / speed
-                lines.append(f"{int(note['time'])},{inherited_beat_length:.2f},4,0,0,100,0,0")
+                lines.append(f"{note_time},{inherited_beat_length:.2f},4,0,0,100,0,0")
                 last_speed = speed
+                last_time = note_time
 
         lines.append("")
 
@@ -119,20 +123,28 @@ class OsuManiaExporter(BaseExporter):
         x_positions = self.COLUMN_X[self.keys]
 
         for note in self.notes:
-            col = note["column"]
-            if col < 0 or col >= self.keys:
-                col = col % self.keys
-            x = x_positions[col]
             y = 192  # osu!mania 的默认 Y 坐标
             time = int(note["time"])
             note_type = note["type"]
 
-            if note_type == "hold":
+            if note_type == "double_hit":
+                for col in note.get("columns", [note.get("column", 0)]):
+                    x = x_positions[col % self.keys]
+                    lines.append(f"{x},{y},{time},1,0,0:0:0:0:")
+            elif note_type == "hold":
+                col = note["column"]
+                if col < 0 or col >= self.keys:
+                    col = col % self.keys
+                x = x_positions[col]
                 # 长按音符：x,y,time,type,hitSound,endTime:hitSample
                 end_time = int(note["end_time"]) if note["end_time"] else time + 200
                 # type 128 = hold note (1<<7)
                 lines.append(f"{x},{y},{time},128,0,{end_time}:0:0:0:0:")
             else:
+                col = note["column"]
+                if col < 0 or col >= self.keys:
+                    col = col % self.keys
+                x = x_positions[col]
                 # 普通音符：x,y,time,type,hitSound,hitSample
                 # type 1 = hit circle
                 lines.append(f"{x},{y},{time},1,0,0:0:0:0:")

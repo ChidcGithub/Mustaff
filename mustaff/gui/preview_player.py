@@ -143,6 +143,10 @@ class AudioPlayer:
             return False
         return pygame.mixer.music.get_busy() or self._paused
 
+    def is_paused(self) -> bool:
+        """是否处于暂停状态"""
+        return self._paused
+
     def get_duration_ms(self) -> float:
         return self._duration_ms
 
@@ -381,7 +385,7 @@ class PreviewCanvas(tk.Canvas):
         ratio = max(0.0, min(1.0, (x - timeline_x0) / (timeline_x1 - timeline_x0)))
         ms = ratio * self.duration_ms
         if self.player:
-            was_playing = self.player.is_playing() and not self.player._paused
+            was_playing = self.player.is_playing() and not self.player.is_paused()
             self.player.seek(ms)
             if not was_playing:
                 self.player.pause()
@@ -390,11 +394,11 @@ class PreviewCanvas(tk.Canvas):
     def _toggle_play(self):
         if not self.player:
             return
-        if self.player.is_playing() and not self.player._paused:
+        if self.player.is_playing() and not self.player.is_paused():
             self.player.pause()
             self.itemconfig(self._play_text, text="▶ 播放")
         else:
-            if self.player._paused:
+            if self.player.is_paused():
                 self.player.unpause()
             else:
                 pos = self.player.get_position_ms()
@@ -420,7 +424,7 @@ class PreviewCanvas(tk.Canvas):
             return
         if self.player:
             current_ms = self.player.get_position_ms()
-            if current_ms >= self.duration_ms and not self.player._paused:
+            if current_ms >= self.duration_ms and not self.player.is_paused():
                 self.player.stop()
                 self.itemconfig(self._play_text, text="▶ 播放")
                 self._running = False
@@ -453,7 +457,7 @@ class PreviewCanvas(tk.Canvas):
         view_bottom_ms = current_ms + self.view_window_ms * (10.0 / min_speed)
 
         lane_colors = get_lane_colors(self.keys)
-        playing = self.player is not None and not self.player._paused
+        playing = self.player is not None and not self.player.is_paused()
 
         # 扩展起始索引以包含 body 仍在可见区域的长 hold
         adjusted_top = view_top_ms - self._max_hold_duration_ms
@@ -464,14 +468,24 @@ class PreviewCanvas(tk.Canvas):
             idx = self._note_indices_by_time[pos]
             note = self.notes[idx]
             note_time = note["time"]
-            col = note["column"]
             note_type = note.get("type", "hit")
             end_time = note.get("end_time")
+            note_speed = note.get("speed", 10.0)
 
-            if col < 0 or col >= self.keys:
-                col = col % self.keys
+            if note_type == "double_hit":
+                columns = note.get("columns", [])
+            else:
+                col = note["column"]
+                if col < 0 or col >= self.keys:
+                    col = col % self.keys
+                columns = [col]
 
-            note_color = lane_colors[col % len(lane_colors)]
+            def time_to_y(t: float, speed: float = 10.0) -> float:
+                dt = (t - current_ms) / 1000.0
+                effective_speed = self.fall_speed * (speed / 10.0)
+                return self.judge_line_y - dt * effective_speed
+
+            s = self._scale
 
             if note_type == "hold" and end_time:
                 visible = not (end_time < view_top_ms or note_time > view_bottom_ms)
@@ -480,54 +494,67 @@ class PreviewCanvas(tk.Canvas):
             if not visible:
                 continue
 
-            def time_to_y(t: float, speed: float = 10.0) -> float:
-                dt = (t - current_ms) / 1000.0
-                effective_speed = self.fall_speed * (speed / 10.0)
-                return self.judge_line_y - dt * effective_speed
-
-            s = self._scale
-            x0 = self.lane_offset_x + col * self.lane_width + int(4*s)
-            x1 = self.lane_offset_x + (col + 1) * self.lane_width - int(4*s)
-            note_speed = note.get("speed", 10.0)
-
-            if note_type == "hold" and end_time:
-                y_head = time_to_y(note_time, note_speed)
-                y_tail = time_to_y(end_time, note_speed)
-                y_head = max(int(-20*s), min(self.canvas_height + int(20*s), y_head))
-                y_tail = max(int(-20*s), min(self.canvas_height + int(20*s), y_tail))
-
-                item = self.create_rectangle(
-                    x0 + int(4*s), y_head, x1 - int(4*s), y_tail,
-                    fill=note_color, outline=note_color, width=1, stipple="gray25"
-                )
-                self._note_items.append(item)
-                item = self.create_rectangle(
-                    x0, y_head - int(4*s), x1, y_head + int(4*s),
-                    fill=note_color, outline=lighten_color(note_color, 0.3), width=max(1, int(1*s))
-                )
-                self._note_items.append(item)
-            else:
+            if note_type == "double_hit":
+                col_min = min(columns)
+                col_max = max(columns)
+                note_color = lane_colors[col_min % len(lane_colors)]
+                x0 = self.lane_offset_x + col_min * self.lane_width + int(4*s)
+                x1 = self.lane_offset_x + (col_max + 1) * self.lane_width - int(4*s)
                 y = time_to_y(note_time, note_speed)
                 if int(-20*s) <= y <= self.canvas_height + int(20*s):
                     outline_color = lighten_color(note_color, 0.3)
                     item = self.create_rectangle(
-                        x0 + int(8*s), y - int(6*s), x1 - int(8*s), y + int(6*s),
+                        x0, y - int(6*s), x1, y + int(6*s),
                         fill=note_color, outline=outline_color, width=max(1, int(1*s))
                     )
                     self._note_items.append(item)
+            else:
+                for col in columns:
+                    note_color = lane_colors[col % len(lane_colors)]
+                    x0 = self.lane_offset_x + col * self.lane_width + int(4*s)
+                    x1 = self.lane_offset_x + (col + 1) * self.lane_width - int(4*s)
+
+                    if note_type == "hold" and end_time:
+                        y_head = time_to_y(note_time, note_speed)
+                        y_tail = time_to_y(end_time, note_speed)
+                        y_head = max(int(-20*s), min(self.canvas_height + int(20*s), y_head))
+                        y_tail = max(int(-20*s), min(self.canvas_height + int(20*s), y_tail))
+
+                        item = self.create_rectangle(
+                            x0 + int(4*s), y_head, x1 - int(4*s), y_tail,
+                            fill=note_color, outline=note_color, width=1, stipple="gray25"
+                        )
+                        self._note_items.append(item)
+                        item = self.create_rectangle(
+                            x0, y_head - int(4*s), x1, y_head + int(4*s),
+                            fill=note_color, outline=lighten_color(note_color, 0.3), width=max(1, int(1*s))
+                        )
+                        self._note_items.append(item)
+                    else:
+                        y = time_to_y(note_time, note_speed)
+                        if int(-20*s) <= y <= self.canvas_height + int(20*s):
+                            outline_color = lighten_color(note_color, 0.3)
+                            item = self.create_rectangle(
+                                x0 + int(8*s), y - int(6*s), x1 - int(8*s), y + int(6*s),
+                                fill=note_color, outline=outline_color, width=max(1, int(1*s))
+                            )
+                            self._note_items.append(item)
 
             if not playing:
                 continue
 
             if idx not in self._hit_set:
-                if current_ms >= note_time and current_ms <= note_time + 80:
+                hit_window = max(50, min(120, int(80 * (10.0 / max(note_speed, 1.0)))))
+                if current_ms >= note_time and current_ms <= note_time + hit_window:
                     self._hit_set.add(idx)
-                    self._spawn_hit_effect(col)
+                    for col in columns:
+                        self._spawn_hit_effect(col)
 
             if note_type == "hold" and end_time:
                 hold_end_key = ("hold_end", idx)
                 if hold_end_key not in self._hit_set:
-                    if current_ms >= end_time and current_ms <= end_time + 80:
+                    hit_window = max(50, min(120, int(80 * (10.0 / max(note_speed, 1.0)))))
+                    if current_ms >= end_time and current_ms <= end_time + hit_window:
                         self._hit_set.add(hold_end_key)
                         self._spawn_hit_effect(col, is_hold_end=True)
 

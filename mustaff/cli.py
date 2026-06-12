@@ -73,6 +73,8 @@ class ProgressSpinner:
 @click.option("--ln-tendency", default=0.5, help="长音倾向 (0=尽量少, 1=尽量多)", show_default=True)
 @click.option("--contrast", default=1.0, help="能量对比度 (0.1-3.5)", show_default=True)
 @click.option("--multi-process-pitch/--no-multi-process-pitch", default=False, help="音高检测使用多进程并行", show_default=True)
+@click.option("--double-hit/--no-double-hit", default=False, help="合并同时下落的音符为双音", show_default=True)
+@click.option("--double-hit-threshold", default=0.5, help="双音 RMS 能量阈值 (0.0-1.0)", show_default=True)
 def main(
     input_file: str,
     output_dir: str,
@@ -97,6 +99,8 @@ def main(
     csv_time_unit: str,
     contrast: float,
     multi_process_pitch: bool,
+    double_hit: bool,
+    double_hit_threshold: float,
 ):
     """Mustaff - 从音频自动生成音游曲谱
 
@@ -145,6 +149,8 @@ def main(
         complexity=complexity,
         ln_tendency=ln_tendency,
         contrast=contrast,
+        enable_double_hit=double_hit,
+        double_hit_threshold=double_hit_threshold,
     )
     notes = mapper.map_notes(
         features, beat_subdivisions=beat_subdivisions,

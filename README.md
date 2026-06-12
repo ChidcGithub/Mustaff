@@ -15,9 +15,10 @@
 ## Features
 
 - **Audio Analysis** — Powered by `librosa` for onset detection, beat tracking, pitch extraction (pYIN), and RMS energy analysis
-- **Beat Mapping** — Pitch-to-column mapping with histogram equalization for balanced distribution across lanes; energy-based hold note (LN) generation
+- **Beat Mapping** — Pitch-to-column mapping with histogram equalization for balanced distribution across lanes; energy-based hold note (LN) generation; auto-resolve hold/short-note column conflicts
 - **Multi-Format Export** — osu!mania (`.osu`, 1K–9K) and custom JSON beatmap formats
 - **Interactive Preview** — Real-time falling-note preview with audio playback, auto-hit effects, seekable timeline, and dynamic canvas rendering
+- **Double Hit (Chord)** — Optionally merge simultaneous notes into chord hits with configurable RMS energy threshold; resolves column conflicts by relocating to free lanes
 - **Multiple Interfaces** — Python API, CLI tool, and tkinter-based GUI with threaded generation and progress reporting
 
 ---

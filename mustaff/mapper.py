@@ -25,6 +25,8 @@ class BeatMapper:
         speed_variation: float = 0.5,
         speed_smoothing: int = 5,
         contrast: float = 1.0,
+        enable_double_hit: bool = False,
+        double_hit_threshold: float = 0.5,
     ):
         self.keys = keys
         self.min_pitch = min_pitch
@@ -44,6 +46,8 @@ class BeatMapper:
         self.speed_variation = max(0.0, min(1.0, speed_variation))
         self.speed_smoothing = max(1, speed_smoothing)
         self.contrast = max(0.1, min(3.5, contrast))
+        self.enable_double_hit = enable_double_hit
+        self.double_hit_threshold = double_hit_threshold
 
     def map_notes(
         self,
@@ -79,6 +83,8 @@ class BeatMapper:
             rms_full=rms_full, pitches_full=pitches_full,
         )
 
+        notes = self._resolve_overlaps(notes)
+
         if self.snap_to_beat and beat_subdivisions is not None and len(beat_subdivisions) > 0:
             notes = self._snap_notes(notes, beat_subdivisions)
 
@@ -89,7 +95,13 @@ class BeatMapper:
             original_idx = sorted_indices[valid_positions[i]]
             result[original_idx] = note
 
-        return [r for r in result if r is not None]
+        notes = [r for r in result if r is not None]
+
+        if self.enable_double_hit:
+            notes = self._merge_double_hits(notes)
+            notes = self._resolve_overlaps(notes)
+
+        return notes
 
     def _snap_notes(
         self,
@@ -512,7 +524,124 @@ class BeatMapper:
                 "type": note_type,
                 "end_time": end_time,
                 "speed": 10.0,
+                "rms_norm": float(rms_contrasted),
             })
 
         notes.sort(key=lambda x: x["time"])
         return notes
+
+    def _resolve_overlaps(self, notes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """解决长音覆盖冲突：优先移列，移不了再删除"""
+        if not notes:
+            return []
+
+        keep: List[bool] = [True] * len(notes)
+        active_holds: Dict[int, float] = {}
+
+        for i, n in enumerate(notes):
+            time = n["time"]
+
+            if n["type"] == "double_hit":
+                cols = list(n.get("columns", []))
+            else:
+                col = n["column"]
+                if col < 0 or col >= self.keys:
+                    col = col % self.keys
+                cols = [col]
+
+            if n["type"] == "hold" and n.get("end_time"):
+                for c in cols:
+                    active_holds[c] = n["end_time"]
+                continue
+
+            if n["type"] not in ("hit", "double_hit"):
+                continue
+
+            conflicted = [c for c in cols if time < active_holds.get(c, -1)]
+            if not conflicted:
+                for c in cols:
+                    if c in active_holds and time >= active_holds[c]:
+                        del active_holds[c]
+                continue
+
+            if n["type"] == "hit":
+                orig_col = cols[0]
+                moved = False
+                for offset in [1, -1, 2, -2, 3, -3]:
+                    new_col = orig_col + offset
+                    if new_col < 0 or new_col >= self.keys:
+                        continue
+                    if time >= active_holds.get(new_col, -1):
+                        n["column"] = new_col
+                        moved = True
+                        break
+                if not moved:
+                    keep[i] = False
+
+            else:
+                new_cols = list(cols)
+                all_resolved = True
+                for idx, c in enumerate(cols):
+                    if time < active_holds.get(c, -1):
+                        found = False
+                        for offset in [1, -1, 2, -2, 3, -3]:
+                            nc = c + offset
+                            if nc < 0 or nc >= self.keys:
+                                continue
+                            if nc in new_cols:
+                                continue
+                            if time >= active_holds.get(nc, -1):
+                                new_cols[idx] = nc
+                                found = True
+                                break
+                        if not found:
+                            all_resolved = False
+                            break
+                if all_resolved:
+                    n["columns"] = sorted(new_cols[:len(cols)])
+                else:
+                    keep[i] = False
+
+        return [notes[i] for i in range(len(notes)) if keep[i]]
+
+    def _merge_double_hits(self, notes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """合并同时下落的同拍音符为 double_hit"""
+        if not notes:
+            return []
+
+        merged: List[Dict[str, Any]] = []
+        i = 0
+        while i < len(notes):
+            note = notes[i]
+            if note["type"] != "hit":
+                merged.append(note)
+                i += 1
+                continue
+
+            group = [note]
+            j = i + 1
+            while j < len(notes) and (notes[j]["time"] - note["time"]) <= self.chord_gap_ms:
+                if notes[j]["type"] == "hit":
+                    group.append(notes[j])
+                else:
+                    break
+                j += 1
+
+            if len(group) >= 2:
+                avg_rms = sum(n.get("rms_norm", 0.5) for n in group) / len(group)
+                if avg_rms >= self.double_hit_threshold:
+                    columns = sorted(n["column"] for n in group)
+                    merged.append({
+                        "time": note["time"],
+                        "columns": columns,
+                        "type": "double_hit",
+                        "speed": note.get("speed", 10.0),
+                        "rms_norm": avg_rms,
+                    })
+                    i = j
+                    continue
+
+            merged.append(note)
+            i += 1
+
+        return merged

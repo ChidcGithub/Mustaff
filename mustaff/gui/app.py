@@ -8,10 +8,12 @@ Mustaff 图形界面
 """
 
 import os
+import json
 import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from dataclasses import dataclass
 from typing import Optional
 import numpy as np
 
@@ -62,6 +64,32 @@ if os.name == "nt":
                 pass
 
 
+@dataclass
+class GenerateConfig:
+    """封装谱面生成参数"""
+    input_path: str
+    keys: int
+    density: float
+    ln_threshold: float
+    difficulty: str
+    onset_sensitivity: float = 0.5
+    backtrack: bool = False
+    multi_band: bool = False
+    multi_process_pitch: bool = False
+    snap_to_beat: bool = False
+    snap_resolution: int = 8
+    min_bpm: float = 50.0
+    max_bpm: float = 200.0
+    complexity: float = 1.0
+    ln_tendency: float = 0.5
+    contrast: float = 1.0
+    enable_double_hit: bool = False
+    double_hit_threshold: float = 0.5
+
+
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mustaff_config.json")
+
+
 class MustaffGUI:
     """Mustaff 主窗口"""
 
@@ -96,6 +124,108 @@ class MustaffGUI:
         self._init_taskbar()
 
         self._build_ui()
+        self.root.after(200, self._ask_restore)
+
+    def _ask_restore(self):
+        if not os.path.exists(CONFIG_PATH):
+            return
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+        except Exception:
+            return
+        if not saved:
+            return
+        s = self._scale
+        dialog = tk.Toplevel(self.root)
+        dialog.title("恢复配置")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        w, h = int(380*s), int(160*s)
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+        ttk.Label(dialog, text="检测到上次的配置，是否恢复？",
+                  font=("", int(12*s))).pack(pady=(int(20*s), int(10*s)))
+        ttk.Label(dialog, text=f"路径: {self._short_path(saved.get('input_path', ''))}",
+                  foreground="gray", font=("", int(9*s))).pack(pady=(0, int(15*s)))
+        btn_f = ttk.Frame(dialog)
+        btn_f.pack(pady=int(10*s))
+        def restore():
+            self._restore_config(saved)
+            dialog.destroy()
+        def skip():
+            dialog.destroy()
+        ttk.Button(btn_f, text="恢复", command=restore, width=int(10*s)).pack(side="left", padx=int(8*s))
+        ttk.Button(btn_f, text="不恢复", command=skip, width=int(10*s)).pack(side="left", padx=int(8*s))
+
+    def _short_path(self, path: str, max_len: int = 60) -> str:
+        if len(path) <= max_len:
+            return path
+        return "..." + path[-(max_len-3):]
+
+    def _save_config(self):
+        try:
+            cfg = {
+                "input_path": self.input_path or "",
+                "output_dir": self.output_dir,
+                "keys": self.keys_var.get(),
+                "density": self.density_var.get(),
+                "ln_threshold": self.ln_var.get(),
+                "difficulty": self.diff_var.get(),
+                "onset_sensitivity": self.onset_sens_var.get(),
+                "backtrack": self.backtrack_var.get(),
+                "multi_band": self.multi_band_var.get(),
+                "multi_process_pitch": self.multi_process_pitch_var.get(),
+                "snap_to_beat": self.snap_to_beat_var.get(),
+                "snap_resolution": self.snap_res_var.get(),
+                "complexity": self.complexity_var.get(),
+                "min_bpm": self.min_bpm_var.get(),
+                "max_bpm": self.max_bpm_var.get(),
+                "ln_tendency": self.ln_tendency_var.get(),
+                "contrast": self.contrast_var.get(),
+                "enable_double_hit": self.double_hit_var.get(),
+                "double_hit_threshold": self.double_hit_threshold_var.get(),
+                "format": self.format_var.get(),
+            }
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _restore_config(self, cfg: dict):
+        try:
+            if cfg.get("input_path") and os.path.exists(cfg["input_path"]):
+                self.input_path = cfg["input_path"]
+                basename = os.path.basename(cfg["input_path"])
+                display = basename if len(basename) <= 40 else basename[:37] + "..."
+                self.file_label.config(text=display, foreground="black")
+                self._log(f"已恢复音频: {cfg['input_path']}")
+            if cfg.get("output_dir") and os.path.isdir(cfg["output_dir"]):
+                self.output_dir = cfg["output_dir"]
+                self.out_label.config(text=cfg["output_dir"])
+            self.keys_var.set(int(cfg.get("keys", 4)))
+            self.density_var.set(float(cfg.get("density", 30.0)))
+            self.ln_var.set(float(cfg.get("ln_threshold", 0.7)))
+            self.diff_var.set(cfg.get("difficulty", "Auto-generated"))
+            self.onset_sens_var.set(float(cfg.get("onset_sensitivity", 0.5)))
+            self.backtrack_var.set(bool(cfg.get("backtrack", False)))
+            self.multi_band_var.set(bool(cfg.get("multi_band", False)))
+            self.multi_process_pitch_var.set(bool(cfg.get("multi_process_pitch", False)))
+            self.snap_to_beat_var.set(bool(cfg.get("snap_to_beat", False)))
+            self.snap_res_var.set(str(cfg.get("snap_resolution", "8")))
+            self.complexity_var.set(float(cfg.get("complexity", 1.0)))
+            self.min_bpm_var.set(float(cfg.get("min_bpm", 50.0)))
+            self.max_bpm_var.set(float(cfg.get("max_bpm", 200.0)))
+            self.ln_tendency_var.set(float(cfg.get("ln_tendency", 0.5)))
+            self.contrast_var.set(float(cfg.get("contrast", 1.0)))
+            self.double_hit_var.set(bool(cfg.get("enable_double_hit", False)))
+            self.double_hit_threshold_var.set(float(cfg.get("double_hit_threshold", 0.5)))
+            self.format_var.set(str(cfg.get("format", "all")))
+            self._log("已恢复上次的配置")
+        except Exception as e:
+            self._log(f"[Error] 恢复配置失败: {e}")
 
     def _detect_scale(self) -> float:
         import platform
@@ -363,6 +493,8 @@ class MustaffGUI:
         row += 1
 
         self.multi_process_pitch_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self._adv_content, text="多进程音高检测", variable=self.multi_process_pitch_var).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=int(2*s))
         row += 1
 
         self.snap_to_beat_var = tk.BooleanVar(value=False)
@@ -408,6 +540,18 @@ class MustaffGUI:
         ttk.Label(self._adv_content, textvariable=self.contrast_var, width=4).grid(row=row, column=2)
         row += 1
 
+        self.double_hit_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self._adv_content, text="双音 (合并同拍音符)", variable=self.double_hit_var).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=int(2*s))
+        row += 1
+
+        ttk.Label(self._adv_content, text="双音 RMS 阈值:").grid(row=row, column=0, sticky="w", pady=int(2*s))
+        self.double_hit_threshold_var = tk.DoubleVar(value=0.5)
+        ttk.Scale(self._adv_content, from_=0.0, to=1.0, variable=self.double_hit_threshold_var,
+                  orient="horizontal", length=int(120*s)).grid(row=row, column=1, padx=int(5*s), pady=int(2*s))
+        ttk.Label(self._adv_content, textvariable=self.double_hit_threshold_var, width=4).grid(row=row, column=2)
+        row += 1
+
         out_frame = ttk.LabelFrame(inner, text="输出目录", padding=int(10*s))
         out_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         out_frame.columnconfigure(0, weight=1)
@@ -442,7 +586,7 @@ class MustaffGUI:
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.5.0", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v0.5.5", foreground="gray",
                   font=("", 7)).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", 7)).pack(anchor="center")
@@ -669,39 +813,35 @@ class MustaffGUI:
                 break
 
         # 启动后台线程
+        cfg = GenerateConfig(
+            input_path=self.input_path,
+            keys=self.keys_var.get(),
+            density=self.density_var.get(),
+            ln_threshold=self.ln_var.get(),
+            difficulty=self.diff_var.get(),
+            onset_sensitivity=self.onset_sens_var.get(),
+            backtrack=self.backtrack_var.get(),
+            multi_band=self.multi_band_var.get(),
+            multi_process_pitch=self.multi_process_pitch_var.get(),
+            snap_to_beat=self.snap_to_beat_var.get(),
+            snap_resolution=int(self.snap_res_var.get()),
+            min_bpm=self.min_bpm_var.get(),
+            max_bpm=self.max_bpm_var.get(),
+            complexity=self.complexity_var.get(),
+            ln_tendency=self.ln_tendency_var.get(),
+            contrast=self.contrast_var.get(),
+            enable_double_hit=self.double_hit_var.get(),
+            double_hit_threshold=self.double_hit_threshold_var.get(),
+        )
         self._worker_thread = threading.Thread(
             target=self._generate_worker,
-            args=(
-                self.input_path,
-                self.keys_var.get(),
-                self.density_var.get(),
-                self.ln_var.get(),
-                self.diff_var.get(),
-                self.onset_sens_var.get(),
-                self.backtrack_var.get(),
-                self.multi_band_var.get(),
-                self.multi_process_pitch_var.get(),
-                self.snap_to_beat_var.get(),
-                int(self.snap_res_var.get()),
-                self.min_bpm_var.get(),
-                self.max_bpm_var.get(),
-                self.complexity_var.get(),
-                self.ln_tendency_var.get(),
-                self.contrast_var.get(),
-            ),
+            args=(cfg,),
             daemon=True,
         )
         self._worker_thread.start()
         self._poll_progress()
 
-    def _generate_worker(self, input_path: str, keys: int, density: float,
-                         ln_threshold: float, difficulty: str,
-                         onset_sensitivity: float = 0.5, backtrack: bool = False,
-                         multi_band: bool = False, multi_process_pitch: bool = False,
-                         snap_to_beat: bool = False,
-                         snap_resolution: int = 8, min_bpm: float = 50.0,
-                         max_bpm: float = 200.0, complexity: float = 1.0,
-                         ln_tendency: float = 0.5, contrast: float = 1.0):
+    def _generate_worker(self, cfg: GenerateConfig):
         """后台线程执行生成任务"""
         def report(step: int, total: int, msg: str):
             self._progress_queue.put({"type": "progress", "step": step, "total": total, "msg": msg})
@@ -709,14 +849,14 @@ class MustaffGUI:
         try:
             report(0, 100, "加载音频...")
             analyzer = AudioAnalyzer(
-                onset_sensitivity=onset_sensitivity,
-                backtrack=backtrack,
-                multi_band=multi_band,
-                min_bpm=min_bpm,
-                max_bpm=max_bpm,
-                multi_process_pitch=multi_process_pitch,
+                onset_sensitivity=cfg.onset_sensitivity,
+                backtrack=cfg.backtrack,
+                multi_band=cfg.multi_band,
+                min_bpm=cfg.min_bpm,
+                max_bpm=cfg.max_bpm,
+                multi_process_pitch=cfg.multi_process_pitch,
             )
-            analyzer.load(input_path)
+            analyzer.load(cfg.input_path)
 
             def on_progress(pct: int, msg: str):
                 report(pct, 100, msg)
@@ -727,18 +867,20 @@ class MustaffGUI:
             features = analyzer.get_note_features()
 
             beat_subdivisions = None
-            if snap_to_beat:
-                beat_subdivisions = analyzer.get_beat_subdivisions(resolution=snap_resolution)
+            if cfg.snap_to_beat:
+                beat_subdivisions = analyzer.get_beat_subdivisions(resolution=cfg.snap_resolution)
 
             mapper = BeatMapper(
-                keys=keys,
-                density_filter_ms=density,
-                ln_threshold_ratio=ln_threshold,
-                snap_to_beat=snap_to_beat,
-                snap_resolution=snap_resolution,
-                complexity=complexity,
-                ln_tendency=ln_tendency,
-                contrast=contrast,
+                keys=cfg.keys,
+                density_filter_ms=cfg.density,
+                ln_threshold_ratio=cfg.ln_threshold,
+                snap_to_beat=cfg.snap_to_beat,
+                snap_resolution=cfg.snap_resolution,
+                complexity=cfg.complexity,
+                ln_tendency=cfg.ln_tendency,
+                contrast=cfg.contrast,
+                enable_double_hit=cfg.enable_double_hit,
+                double_hit_threshold=cfg.double_hit_threshold,
             )
             notes = mapper.map_notes(
                 features, beat_subdivisions=beat_subdivisions,
@@ -746,16 +888,16 @@ class MustaffGUI:
             )
 
             report(100, 100, "生成完成")
-            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            base_name = os.path.splitext(os.path.basename(cfg.input_path))[0]
 
             # 发送完成消息
             self._progress_queue.put({
                 "type": "done",
                 "notes": notes,
-                "keys": keys,
+                "keys": cfg.keys,
                 "duration_ms": int(analyzer.duration * 1000),
                 "title": base_name,
-                "audio_path": input_path,
+                "audio_path": cfg.input_path,
                 "bpm": analyzer.tempo,
                 "onset_count": len(analyzer.onset_times) if analyzer.onset_times is not None else 0,
                 "duration_sec": analyzer.duration,
@@ -908,110 +1050,14 @@ class MustaffGUI:
 
     def _draw_preview(self):
         self.ax.clear()
-
-        notes = self.current_notes
-        keys = self.current_keys
-        duration_ms = self.current_duration_ms
-        title = self.current_title
-        s = self._scale
-
-        import numpy as np
-        from matplotlib.patches import Patch
-
-        lane_colors_bg = ["#f0f0f0", "#e8e8e8"]
-        lane_colors_notes = lane_colors(keys)
-
-        for i in range(keys):
-            self.ax.axhspan(i - 0.5, i + 0.5, color=lane_colors_bg[i % 2], alpha=0.3, zorder=0)
-        for i in range(keys + 1):
-            self.ax.axhline(i - 0.5, color="#cccccc", linewidth=0.5, zorder=1)
-
-        max_time_s = duration_ms / 1000.0 if duration_ms else 0.0
-        if max_time_s <= 0 and notes:
-            max_time_s = max(n["time"] for n in notes) / 1000.0 * 1.05
-
-        if max_time_s > 0:
-            grid_spacing = 1 if max_time_s <= 30 else (5 if max_time_s <= 120 else 10)
-            for t in np.arange(0, max_time_s + grid_spacing, grid_spacing):
-                self.ax.axvline(t, color="#cccccc", linewidth=0.3, linestyle="--", alpha=0.4, zorder=0)
-
-        hit_by_col: dict = {}
-        hold_segments = []
-
-        for note in notes:
-            col = note["column"]
-            t = note["time"] / 1000.0
-            if col < 0 or col >= keys:
-                col = col % keys
-            note_type = note.get("type", "hit")
-            if note_type == "hold":
-                end_t = (note.get("end_time") or note["time"] + 200) / 1000.0
-                hold_segments.append((t, end_t, col))
-            else:
-                hit_by_col.setdefault(col, ([], []))
-                hit_by_col[col][0].append(t)
-                hit_by_col[col][1].append(col)
-
-        for col, (times, cols) in hit_by_col.items():
-            color = lane_colors_notes[col % len(lane_colors_notes)]
-            self.ax.scatter(
-                times, cols,
-                c=color, s=max(20, int(35*s)), alpha=0.9, zorder=3,
-                edgecolors="white", linewidths=max(0.3, 0.5*s),
-            )
-
-        for start_t, end_t, col in hold_segments:
-            color = lane_colors_notes[col % len(lane_colors_notes)]
-            self.ax.barh(
-                col, width=end_t - start_t, left=start_t,
-                height=0.65, color=color, alpha=0.7, zorder=2,
-                edgecolor=color, linewidth=0.5,
-            )
-
-        self.ax.set_yticks(range(keys))
-        self.ax.set_yticklabels([f"Key {i+1}" for i in range(keys)], color="black")
-        self.ax.set_ylim(-0.6, keys - 0.4)
-        self.ax.invert_yaxis()
-
-        if max_time_s > 0:
-            self.ax.set_xlim(0, max_time_s)
-
-        self.ax.set_xlabel("Time (s)", fontsize=10, color="black")
-        self.ax.set_facecolor("white")
-        self.ax.tick_params(colors="black", labelsize=8)
-        self.ax.xaxis.label.set_color("black")
-        self.ax.yaxis.label.set_color("black")
-        self.ax.spines["bottom"].set_color("#cccccc")
-        self.ax.spines["left"].set_color("#cccccc")
-        self.ax.spines["top"].set_visible(False)
-        self.ax.spines["right"].set_visible(False)
-
-        hit_count = sum(len(t) for t, _ in hit_by_col.values())
-        hold_count = len(hold_segments)
-        info = f"Keys: {keys}  |  Notes: {hit_count} hits + {hold_count} holds = {len(notes)} total"
-        self.ax.set_title(f"{title} [{keys}K]\n{info}", fontsize=11, color="black", pad=int(8*s))
-
-        legend_elements = []
-        for i in range(min(keys, len(lane_colors_notes))):
-            legend_elements.append(
-                Patch(facecolor=lane_colors_notes[i], edgecolor="white", label=f"Lane {i+1}")
-            )
-        legend_elements.append(
-            Patch(facecolor=lane_colors_notes[0], edgecolor="white", alpha=0.5, label="Hold (LN)")
+        from ..preview import draw_preview_on_axes
+        title = f"{self.current_title} [{self.current_keys}K]"
+        draw_preview_on_axes(
+            self.ax, self.fig,
+            self.current_notes, self.current_keys,
+            self.current_duration_ms, title,
+            scale=self._scale,
         )
-        legend = self.ax.legend(
-            handles=legend_elements, loc="upper right",
-            facecolor="white", edgecolor="#cccccc",
-            labelcolor="black", fontsize=7, ncol=2,
-        )
-        try:
-            legend.legend_handles[-1].set_alpha(0.5)
-        except (AttributeError, IndexError):
-            try:
-                legend.legendHandles[-1].set_alpha(0.5)
-            except (AttributeError, IndexError):
-                pass
-
         self.fig.tight_layout()
         self.static_canvas.draw()
 
@@ -1074,7 +1120,10 @@ class MustaffGUI:
         self.back_btn.config(state="disabled")
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            self._save_config()
 
 
 def run_gui():
