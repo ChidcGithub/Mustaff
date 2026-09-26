@@ -60,7 +60,11 @@ class BeatFiLM(nn.Module):
 
 
 class PlacementTransformer(nn.Module):
-    """拍级放置：输入 [B, T_beats, steps, F] + (bpm, stars) → 事件 logits [B, T_beats, 48]"""
+    """拍级放置：输入 [B, T_beats, steps, F] + (bpm, stars) → 事件 logits [B, T_beats, 48]
+
+    附带诊断头（ITGPT 式）：从 pooling 后的隐状态回归 (bpm, stars)，
+    训练时以 MSE 监督，强制主干真正编码速度与难度信息。
+    """
 
     def __init__(self, n_feats: int = FEATURE_DIM, steps: int = BEAT_FEAT_STEPS,
                  d_model: int = 192, n_layers: int = 4, n_head: int = 8,
@@ -77,16 +81,23 @@ class PlacementTransformer(nn.Module):
             batch_first=True, norm_first=True)
         self.enc = nn.TransformerEncoder(layer, n_layers)
         self.head = nn.Linear(d_model, slots)
+        self.diag = nn.Linear(d_model, 2)  # 诊断头：回归 (bpm/300, stars/10)
 
     def forward(self, units, bar_phase, cond, pad_mask=None):
-        """units [B,T,S,F]，bar_phase [B,T]（0/0.25/0.5/0.75），cond [B,2]，pad_mask [B,T] True=pad"""
+        """units [B,T,S,F]，bar_phase [B,T]，cond [B,2]，pad_mask [B,T] True=pad
+        返回 (event_logits [B,T,48], diag_pred [B,2])"""
         B, T = units.shape[:2]
         h = self.inp(units.reshape(B, T, -1))
         h = h + self.pos_emb.weight[:T][None]
         h = h + self.bar_emb((bar_phase * 4).long().clamp(0, 3))
         h = self.film(h.transpose(1, 2), cond).transpose(1, 2)
         h = self.enc(h, src_key_padding_mask=pad_mask)
-        return self.head(h)  # [B, T, 48]
+        if pad_mask is not None:
+            keep = (~pad_mask).float().unsqueeze(-1)
+            pooled = (h * keep).sum(1) / keep.sum(1).clamp(min=1.0)
+        else:
+            pooled = h.mean(1)
+        return self.head(h), self.diag(pooled)
 
 
 class SelectionLSTM(nn.Module):

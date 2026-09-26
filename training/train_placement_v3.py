@@ -6,6 +6,7 @@
 """
 
 import argparse
+import copy
 import json
 import os
 import time
@@ -68,7 +69,7 @@ def evaluate(model, files, device, threshold=0.5, max_sets=40):
                 bp = torch.from_numpy(bar_phase)[None].to(device)
                 cond = torch.tensor([[np.clip(bpm / 300.0, 0, 2), stars / 10.0]],
                                     dtype=torch.float32, device=device)
-                probs = torch.sigmoid(model(x, bp, cond))[0].cpu().numpy()  # [B,48]
+                probs = torch.sigmoid(model(x, bp, cond)[0])[0].cpu().numpy()  # [B,48]
                 pb, ps = np.nonzero(probs > threshold)
                 pred_L = pb * SLOTS_PER_BEAT + ps
 
@@ -96,15 +97,42 @@ def main():
     train_ds = PlacementDatasetV3(split["train"], samples_per_epoch=args.samples_per_epoch)
     print(f"训练集 charts: {len(train_ds.items)}  device: {args.device}", flush=True)
 
-    loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=0,
+    use_cuda = args.device.startswith("cuda") and torch.cuda.is_available()
+    loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
+                        num_workers=4 if use_cuda else 0, pin_memory=use_cuda,
+                        persistent_workers=use_cuda, prefetch_factor=4 if use_cuda else None,
                         collate_fn=collate_place_v3, drop_last=True)
 
     model = PlacementTransformer().to(args.device)
     print(f"参数量: {count_params(model)/1e6:.2f}M", flush=True)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
-    pos_w = torch.tensor(6.0, device=args.device)
+    # warmup 1 epoch（Transformer 怕开头大 lr）→ cosine 退火
+    sched = torch.optim.lr_scheduler.SequentialLR(
+        opt,
+        [torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.1, total_iters=1),
+         torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, args.epochs - 1))],
+        milestones=[1])
+    pos_w = torch.tensor(4.0, device=args.device)  # 6→4：修数量比 1.52 的系统性过预测
+    diag_w = 0.3  # 诊断 loss 权重（BPM/难度回归，强制条件编码）
+
+    # EMA：评估与存档用滑动平均权重，小数据上更稳
+    ema_model = copy.deepcopy(model)
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+
+    @torch.no_grad()
+    def ema_update(decay: float = 0.999):
+        for ep, p in zip(ema_model.parameters(), model.parameters()):
+            ep.mul_(decay).add_(p.detach(), alpha=1 - decay)
+        for eb, b in zip(ema_model.buffers(), model.buffers()):
+            eb.copy_(b)
+
+    def _forward(units, bar, cond, mask):
+        if use_cuda:  # bf16 混合精度（4060 原生支持，无需 GradScaler）
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                return model(units, bar, cond, pad_mask=mask)
+        return model(units, bar, cond, pad_mask=mask)
 
     best_f1 = 0.0
     history = []
@@ -113,22 +141,24 @@ def main():
         t0 = time.time()
         losses = []
         for units, bar, label, cond, mask in loader:
-            units = units.to(args.device)
-            bar = bar.to(args.device)
-            label = label.to(args.device)
-            cond = cond.to(args.device)
-            mask = mask.to(args.device)
-            logits = model(units, bar, cond, pad_mask=mask)
+            units = units.to(args.device, non_blocking=True)
+            bar = bar.to(args.device, non_blocking=True)
+            label = label.to(args.device, non_blocking=True)
+            cond = cond.to(args.device, non_blocking=True)
+            mask = mask.to(args.device, non_blocking=True)
+            logits, diag = _forward(units, bar, cond, mask)
             loss = F.binary_cross_entropy_with_logits(
-                logits[~mask], label[~mask], pos_weight=pos_w)
+                logits[~mask].float(), label[~mask], pos_weight=pos_w)
+            loss = loss + diag_w * F.mse_loss(diag.float(), cond)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+            ema_update()
             losses.append(loss.item())
         sched.step()
 
-        f1, ratio = evaluate(model, split["val"], args.device)
+        f1, ratio = evaluate(ema_model, split["val"], args.device)
         dt = time.time() - t0
         print(f"[Epoch {epoch:02d}] loss={np.mean(losses):.4f}  "
               f"val slotF1={f1:.4f}  数量比={ratio:.2f}  {dt:.0f}s", flush=True)
@@ -136,7 +166,7 @@ def main():
                         "slot_f1": f1, "count_ratio": ratio})
         if f1 > best_f1:
             best_f1 = f1
-            torch.save(model.state_dict(), BEST_PATH)
+            torch.save(ema_model.state_dict(), BEST_PATH)  # 存 EMA 权重
 
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
         json.dump({"best_slot_f1": best_f1, "history": history}, f, indent=1)

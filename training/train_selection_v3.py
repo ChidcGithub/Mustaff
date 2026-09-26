@@ -6,6 +6,7 @@
 """
 
 import argparse
+import copy
 import json
 import os
 import time
@@ -65,15 +66,36 @@ def main():
     val_ds = SelectionDatasetV3(split["val"], mirror=False)
     print(f"训练 charts: {len(train_ds)}  val charts: {len(val_ds)}  device: {args.device}", flush=True)
 
-    loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=0,
+    use_cuda = args.device.startswith("cuda") and torch.cuda.is_available()
+    loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
+                        num_workers=4 if use_cuda else 0, pin_memory=use_cuda,
+                        persistent_workers=use_cuda, prefetch_factor=4 if use_cuda else None,
                         collate_fn=collate_sel_v3)
 
     model = SelectionLSTM().to(args.device)
     print(f"参数量: {count_params(model)/1e6:.2f}M", flush=True)
 
+    def _forward(audio, prev, cond):
+        if use_cuda:  # bf16 混合精度
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                return model(audio, prev, cond)
+        return model(audio, prev, cond)
+
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+
+    # EMA：评估与存档用滑动平均权重
+    ema_model = copy.deepcopy(model)
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+
+    @torch.no_grad()
+    def ema_update(decay: float = 0.999):
+        for ep, p in zip(ema_model.parameters(), model.parameters()):
+            ep.mul_(decay).add_(p.detach(), alpha=1 - decay)
+        for eb, b in zip(ema_model.buffers(), model.buffers()):
+            eb.copy_(b)
 
     best_acc = 0.0
     history = []
@@ -81,28 +103,47 @@ def main():
         model.train()
         t0 = time.time()
         losses = []
+        # scheduled sampling：前半程线性升到 25%——把部分 teacher forcing 历史
+        # 换成模型自己的预测，修暴露偏差（生成时长音风格级联失稳的根因）
+        ss_p = 0.25 * min(1.0, (epoch - 1) / max(1.0, args.epochs / 2))
         for audio, prev, cond, target in loader:
-            audio = audio.to(args.device)
-            prev = prev.to(args.device)
-            cond = cond.to(args.device)
-            target = target.to(args.device)
-            logits, _ = model(audio, prev, cond)
-            loss = criterion(logits.reshape(-1, model.n_combo), target.reshape(-1))
+            audio = audio.to(args.device, non_blocking=True)
+            prev = prev.to(args.device, non_blocking=True)
+            cond = cond.to(args.device, non_blocking=True)
+            target = target.to(args.device, non_blocking=True)
+            prev_in = prev
+            if ss_p > 0:
+                with torch.no_grad():
+                    own = _forward(audio, prev, cond)[0].argmax(dim=-1)  # [B,N]
+                prev_in = prev.clone()
+                B, N, H = prev.shape
+                n_range = torch.arange(N, device=args.device)
+                for h in range(H):
+                    back = H - h
+                    src = (n_range - back).clamp(min=0)
+                    valid = ((n_range - back) >= 0)[None, :] & (target >= 0)
+                    repl = torch.where((torch.rand(B, N, device=args.device) < ss_p) & valid,
+                                       own[:, src], prev_in[:, :, h])
+                    prev_in[:, :, h] = repl
+            logits, _ = _forward(audio, prev_in, cond)
+            loss = criterion(logits.reshape(-1, model.n_combo).float(), target.reshape(-1))
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+            ema_update()
             losses.append(loss.item())
         sched.step()
 
-        acc, prior = evaluate(model, val_ds, args.device)
+        acc, prior = evaluate(ema_model, val_ds, args.device)
         dt = time.time() - t0
-        print(f"[Epoch {epoch:02d}] loss={np.mean(losses):.4f}  "
+        print(f"[Epoch {epoch:02d}] loss={np.mean(losses):.4f}  ss_p={ss_p:.2f}  "
               f"val combo_acc={acc:.4f} (先验 {prior:.4f})  {dt:.0f}s", flush=True)
-        history.append({"epoch": epoch, "loss": float(np.mean(losses)), "acc": acc})
+        history.append({"epoch": epoch, "loss": float(np.mean(losses)),
+                        "acc": acc, "ss_p": ss_p})
         if acc > best_acc:
             best_acc = acc
-            torch.save(model.state_dict(), BEST_PATH)
+            torch.save(ema_model.state_dict(), BEST_PATH)  # 存 EMA 权重
 
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
         json.dump({"best_acc": best_acc, "history": history}, f, indent=1)

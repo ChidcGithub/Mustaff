@@ -117,8 +117,9 @@ STATE23_MASK = ((_STATES_4 == 2) | (_STATES_4 == 3)).any(dim=1)  # 含长音状�
 def _load_models_v3(model_dir: str, device: str):
     if "placement_v3" not in _model_cache:
         pm = PlacementTransformer()
-        pm.load_state_dict(torch.load(os.path.join(model_dir, "placement_v3_best.pt"),
-                                      map_location=device, weights_only=True))
+        sd = torch.load(os.path.join(model_dir, "placement_v3_best.pt"),
+                        map_location=device, weights_only=True)
+        pm.load_state_dict(sd, strict=False)  # 旧 checkpoint 无 diag 头，宽松加载
         pm.to(device).eval()
         _model_cache["placement_v3"] = pm
     if "selection_v3" not in _model_cache:
@@ -214,7 +215,7 @@ def generate_notes_ml_v3(
                           dtype=torch.float32, device=device)
     x = torch.from_numpy(units)[None].to(device)
     bp = torch.from_numpy(bar_phase)[None].to(device)
-    probs = torch.sigmoid(placement(x, bp, cond_t))[0].cpu().numpy()  # [B,48]
+    probs = torch.sigmoid(placement(x, bp, cond_t)[0])[0].cpu().numpy()  # [B,48]
 
     if threshold is None:
         threshold = _adaptive_threshold(probs, beat_times, stars)

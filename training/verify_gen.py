@@ -11,7 +11,7 @@ from mustaff.analyzer import AudioAnalyzer
 from training.generate import generate_notes_ml, models_available
 
 STARS = float(sys.argv[1]) if len(sys.argv) > 1 else 6.0
-HOLD_BIAS = float(sys.argv[2]) if len(sys.argv) > 2 else 2.0
+HEAD_THR = float(sys.argv[2]) if len(sys.argv) > 2 else None  # None = 用 generate 默认值
 
 print("models_available:", models_available())
 
@@ -30,7 +30,8 @@ try:
 finally:
     os.remove(tmp)
 
-notes = generate_notes_ml(y, stars=STARS, head_thr=HOLD_BIAS)
+kw = {"head_thr": HEAD_THR} if HEAD_THR is not None else {}
+notes = generate_notes_ml(y, stars=STARS, **kw)
 holds = [n for n in notes if n["type"] == "hold"]
 cols = [n["column"] for n in notes]
 print(f"stars={STARS}  notes={len(notes)}  holds={len(holds)}  "
