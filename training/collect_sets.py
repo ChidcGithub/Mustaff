@@ -98,6 +98,7 @@ def harvest(target: int = 1000) -> dict:
         if len(index) >= target:
             break
         offset = 0
+        empty_streak = 0
         while len(index) < target:
             try:
                 resp = fetch_list(limit=100, offset=offset, keyword=kw)
@@ -107,10 +108,19 @@ def harvest(target: int = 1000) -> dict:
             new = _add(resp)
             endid = resp.get("endid", 0)
             print(f"[搜索 {kw!r}] offset={offset} +{new}（累计 {len(index)}）", flush=True)
+            if new == 0:
+                empty_streak += 1
+                if empty_streak >= 5:  # 连续 5 页无新增 → 该词已收割完
+                    break
+            else:
+                empty_streak = 0
             if endid == 0 or endid == offset:
                 break
             offset = endid
             time.sleep(0.3)
+        # 每个关键词结束就落盘，崩溃不丢进度
+        with open(INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False, indent=1)
 
     with open(INDEX_PATH, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=1)
@@ -118,26 +128,43 @@ def harvest(target: int = 1000) -> dict:
     return index
 
 
-def download_one(sid: int) -> bool:
+def _valid_osz(path: str) -> bool:
+    """文件存在、够大且是 zip（防错误页/半截文件被当成已下载）"""
+    if not (os.path.exists(path) and os.path.getsize(path) > 10000):
+        return False
+    try:
+        with open(path, "rb") as f:
+            return f.read(2) == b"PK"
+    except OSError:
+        return False
+
+
+def download_one(sid: int, retries: int = 2) -> bool:
     path = os.path.join(OSZ_DIR, f"{sid}.osz")
-    if os.path.exists(path) and os.path.getsize(path) > 10000:
+    if _valid_osz(path):
         return True
-    for url_tpl, name in ((DL_SAYOBOT, "sayobot"), (DL_CATBOY, "catboy")):
-        try:
-            req = urllib.request.Request(url_tpl.format(sid=sid), headers=UA)
-            with urllib.request.urlopen(req, timeout=600) as resp, open(path, "wb") as f:
-                while True:
-                    chunk = resp.read(1 << 20)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            if os.path.getsize(path) > 10000:
-                print(f"  [OK {name}] {sid} ({os.path.getsize(path)/1e6:.1f}MB)", flush=True)
-                return True
-        except Exception:
-            pass
-        if os.path.exists(path):
-            os.remove(path)
+    for attempt in range(retries):
+        for url_tpl, name in ((DL_SAYOBOT, "sayobot"), (DL_CATBOY, "catboy")):
+            try:
+                req = urllib.request.Request(url_tpl.format(sid=sid), headers=UA)
+                with urllib.request.urlopen(req, timeout=600) as resp, open(path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                if _valid_osz(path):
+                    print(f"  [OK {name}] {sid} ({os.path.getsize(path)/1e6:.1f}MB)", flush=True)
+                    return True
+            except Exception:
+                pass
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        if attempt + 1 < retries:
+            time.sleep(2 * (attempt + 1))  # 限速/断连场景退避后重试
     print(f"  [Warn] 双源均失败 {sid}", flush=True)
     return False
 
@@ -162,7 +189,7 @@ def main():
     candidates = sorted(index.values(), key=lambda r: r.get("play_count", 0), reverse=True)
     n_total = len([f for f in os.listdir(OSZ_DIR) if f.endswith(".osz")])
     todo = [r for r in candidates
-            if not os.path.exists(os.path.join(OSZ_DIR, f"{r['id']}.osz"))]
+            if not _valid_osz(os.path.join(OSZ_DIR, f"{r['id']}.osz"))]
     todo = todo[: max(0, args.max_sets - n_total)]
     print(f"已有 {n_total} 个 .osz，本次并行下载 {len(todo)} 个（{args.workers} 线程）", flush=True)
 
@@ -170,10 +197,13 @@ def main():
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futs = {pool.submit(download_one, rec["id"]): rec for rec in todo}
         for fut in as_completed(futs):
-            if fut.result():
-                n_ok += 1
-                if n_ok % 10 == 0:
-                    print(f"[{n_ok}/{len(todo)}]", flush=True)
+            try:
+                if fut.result():
+                    n_ok += 1
+            except Exception as e:
+                print(f"  [Error] {futs[fut].get('id')}: {e}", flush=True)
+            if n_ok > 0 and n_ok % 10 == 0:
+                print(f"[{n_ok}/{len(todo)}]", flush=True)
 
     print(f"[Done] 本次下载 {n_ok}/{len(todo)}，累计 {n_total + n_ok} 个 .osz", flush=True)
 

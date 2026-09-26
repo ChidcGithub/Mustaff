@@ -35,6 +35,21 @@ def _decode_fallback(filepath: str, target_sr: int) -> Tuple[np.ndarray, int]:
     return y, target_sr
 
 
+def _decode_ffmpeg(filepath: str, target_sr: int) -> Tuple[np.ndarray, int]:
+    """最终兜底：ffmpeg 解码全格式（m4a/aac/wma/opus 等）→ f32 mono PCM"""
+    import subprocess
+    import imageio_ffmpeg
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-v", "error", "-i", filepath,
+           "-f", "f32le", "-ac", "1", "-ar", str(target_sr), "-"]
+    proc = subprocess.run(cmd, capture_output=True)
+    y = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+    if proc.returncode != 0 or y.size == 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()[:200]
+        raise RuntimeError(f"ffmpeg 解码失败: {err or '输出为空'}")
+    return y, target_sr
+
+
 class AudioAnalyzer:
     """音频分析器，提取音游谱面所需的各种特征"""
 
@@ -84,8 +99,12 @@ class AudioAnalyzer:
             if sr_loaded != self.sr:
                 self.sr = sr_loaded
         except Exception:
-            # libsndfile 无法解码时（部分 MP3 头不规范）退回 miniaudio
-            self.y, self.sr = _decode_fallback(filepath, self.sr)
+            try:
+                # libsndfile 无法解码时（部分 MP3 头不规范）退回 miniaudio
+                self.y, self.sr = _decode_fallback(filepath, self.sr)
+            except Exception:
+                # m4a/aac/wma 等 miniaudio 也不支持的格式 → ffmpeg 终极兜底
+                self.y, self.sr = _decode_ffmpeg(filepath, self.sr)
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         return self
 

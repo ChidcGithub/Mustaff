@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from .dataset import SelectionDataset, load_split
-from .models import SelectionNet, count_params
+from .models import SelectionNet, count_params, HISTORY
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(ROOT, "output")
@@ -29,7 +29,7 @@ def collate_selection(batch, keys: int = 4):
     W, F = batch[0][0].shape[1], batch[0][0].shape[2]
     B = len(batch)
     ctx = torch.zeros(B, maxn, W, F)
-    prev = torch.full((B, maxn), keys, dtype=torch.long)
+    prev = torch.full((B, maxn, HISTORY), keys, dtype=torch.long)
     cols = torch.full((B, maxn), -100, dtype=torch.long)
     stars = torch.zeros(B)
     for i, (c, p, t, s) in enumerate(batch):
@@ -77,7 +77,7 @@ def main():
     split = load_split()
     train_ds = SelectionDataset(split["train"])
     val_ds = SelectionDataset(split["val"])
-    print(f"训练 charts: {len(train_ds.samples)}  val charts: {len(val_ds.samples)}  device: {args.device}")
+    print(f"训练 charts: {len(train_ds)}  val charts: {len(val_ds)}  device: {args.device}")
 
     loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=0,
                         collate_fn=collate_selection)

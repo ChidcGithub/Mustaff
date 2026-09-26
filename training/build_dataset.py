@@ -2,7 +2,7 @@
 数据集构建：.osz → 音频特征 + 谱面标签
 
 每个谱面集（set）产出一个 .npz：
-  features:      [T, 65] float16  log-mel(64) + onset_strength(1)，hop=512@22050（≈23.2ms/帧）
+  features:      [T, 82] float16  见 training/features.py（mel+chroma+onset+rms+节拍相位+bpm）
   chart_<bid>:   dict 数组前缀，每个 4K 难度一组：
     labels_<bid> [T]   uint8      该帧是否有音符头（±0 帧对齐）
     cols_<bid>   [N]   uint8      每个音符的列（0-3）
@@ -24,12 +24,13 @@ import json
 import os
 import zipfile
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 import numpy as np
 import librosa
 
 from mustaff.analyzer import AudioAnalyzer
+from .features import SR, HOP, extract_features, beats_from_timing_points, dominant_bpm
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT, "data")
@@ -38,31 +39,13 @@ OUT_DIR = os.path.join(DATA_DIR, "npz")
 INDEX_PATH = os.path.join(DATA_DIR, "sets_index.json")
 SPLIT_PATH = os.path.join(DATA_DIR, "split.json")
 
-SR = 22050
-HOP = 512          # ≈23.2ms @22050
-N_MELS = 64
 MAX_DURATION_S = 360.0  # 超过 6 分钟的歌截断
 MIN_NOTES = 50
 
 
-def extract_features(y: np.ndarray) -> np.ndarray:
-    """log-mel + onset 强度 → [T, 65] float16"""
-    S = np.abs(librosa.stft(y, n_fft=2048, hop_length=HOP))
-    mel = librosa.feature.melspectrogram(S=S, sr=SR, n_mels=N_MELS)
-    log_mel = librosa.power_to_db(mel, ref=np.max).T  # [T, 64]
-    onset_env = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP)  # [T]
-    onset_env = onset_env / (onset_env.max() + 1e-8)
-
-    T = min(log_mel.shape[0], onset_env.shape[0])
-    feats = np.concatenate(
-        [log_mel[:T], onset_env[:T, None]], axis=1
-    )
-    return feats.astype(np.float16)
-
-
 def parse_osu_text(text: str) -> dict:
-    """轻量解析 .osu：模式、音频文件名、CircleSize、HitObjects"""
-    info = {"mode": 0, "audio": "", "cs": 4.0, "notes": []}
+    """轻量解析 .osu：模式、音频文件名、CircleSize、TimingPoints、HitObjects"""
+    info = {"mode": 0, "audio": "", "cs": 4.0, "timing": [], "notes": []}
     section = ""
     for line in text.splitlines():
         line = line.strip()
@@ -77,6 +60,15 @@ def parse_osu_text(text: str) -> dict:
             info["audio"] = line.split(":", 1)[1].strip()
         elif section == "Difficulty" and line.startswith("CircleSize:"):
             info["cs"] = float(line.split(":", 1)[1].strip())
+        elif section == "TimingPoints":
+            parts = line.split(",")
+            if len(parts) >= 2:
+                try:
+                    off, bl = float(parts[0]), float(parts[1])
+                except ValueError:
+                    continue
+                if bl > 0:  # 只保留 uninherited（红线），继承线 bl<0 不改 BPM
+                    info["timing"].append((off, bl))
         elif section == "HitObjects":
             parts = line.split(",")
             if len(parts) < 6:
@@ -151,7 +143,13 @@ def build_one(osz_path: str, set_id: str, index_entry: dict) -> str:
         y = y[: int(MAX_DURATION_S * SR)]
         duration = MAX_DURATION_S
 
-    feats = extract_features(y)
+    # 节拍网格：取音符最多的谱面的 timing points（同一 set 内共享同一首歌）
+    main_chart = max(charts.values(), key=lambda p: len(p["notes"]))
+    duration_ms = duration * 1000.0
+    beat_times, fd_idx = beats_from_timing_points(main_chart["timing"], duration_ms)
+    bpm = dominant_bpm(main_chart["timing"], duration_ms)
+
+    feats = extract_features(y, beat_times, fd_idx, bpm)
     T = feats.shape[0]
     frame_dur = HOP / SR
 
@@ -191,15 +189,59 @@ def build_one(osz_path: str, set_id: str, index_entry: dict) -> str:
         "set_id": set_id,
         "title": index_entry.get("title", ""),
         "artist": index_entry.get("artist", ""),
-        "bpm": index_entry.get("bpm", 0),
+        "bpm": bpm,
         "charts": n_charts,
         "duration": duration,
         "frames": T,
     }).encode("utf-8"), dtype=np.uint8)
 
     out_path = os.path.join(OUT_DIR, f"{set_id}.npz")
+    out["beat_times"] = beat_times.astype(np.float32)
+    out["fd_idx"] = np.array(fd_idx, dtype=np.int32)
     np.savez_compressed(out_path, **out)
     return out_path
+
+
+def backfill_beats_one(set_id: str) -> bool:
+    """给已有 npz 补 beat_times/fd_idx（只解析 .osu timing，不解码音频）"""
+    npz_path = os.path.join(OUT_DIR, f"{set_id}.npz")
+    osz_path = os.path.join(OSZ_DIR, f"{set_id}.osz")
+    if not (os.path.exists(npz_path) and os.path.exists(osz_path)):
+        return False
+    with np.load(npz_path) as z:
+        if "beat_times" in z.files:
+            return True
+        data = {k: z[k] for k in z.files}
+    duration_ms = float(json.loads(bytes(data["meta"]).decode("utf-8"))["duration"]) * 1000.0
+    timing = []
+    try:
+        with zipfile.ZipFile(osz_path) as zf:
+            best = None
+            for n in zf.namelist():
+                if not n.lower().endswith(".osu"):
+                    continue
+                parsed = parse_osu_text(zf.read(n).decode("utf-8-sig", errors="replace"))
+                if parsed["mode"] != 3 or int(round(parsed["cs"])) != 4 or not parsed["timing"]:
+                    continue
+                if best is None or len(parsed["notes"]) > len(best["notes"]):
+                    best = parsed
+            if best:
+                timing = best["timing"]
+    except Exception:
+        return False
+    beat_times, fd_idx = beats_from_timing_points(timing, duration_ms)
+    data["beat_times"] = beat_times.astype(np.float32)
+    data["fd_idx"] = np.array(fd_idx, dtype=np.int32)
+    np.savez_compressed(npz_path, **data)
+    return True
+
+
+def backfill_beats(workers: int = 8):
+    """批量回填所有缺 beat_times 的 npz"""
+    ids = [os.path.splitext(f)[0] for f in os.listdir(OUT_DIR) if f.endswith(".npz")]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(backfill_beats_one, ids))
+    print(f"[Done] 回填 {sum(results)}/{len(ids)} 个 npz")
 
 
 def make_split():
@@ -225,7 +267,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
+    ap.add_argument("--backfill-beats", action="store_true", help="只回填 beat_times，不重建特征")
     args = ap.parse_args()
+
+    if args.backfill_beats:
+        backfill_beats(args.workers)
+        return
 
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(INDEX_PATH, "r", encoding="utf-8") as f:
