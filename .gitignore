@@ -34,6 +34,7 @@ ENV/
 env/
 
 # IDEs
+.vs/
 .vscode/
 .idea/
 *.swp
@@ -50,3 +51,7 @@ Mustaff-macOS/
 Mustaff-Linux/
 *.zip
 *.tar.gz
+
+# Training data & models（体积大，不入库）
+training/data/
+training/output/

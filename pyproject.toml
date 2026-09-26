@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mustaff"
-version = "0.5.5"
+version = "1.0.0rc1"
 description = "自动从音频生成音游曲谱的工具"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -32,6 +32,7 @@ dependencies = [
     "pygame>=2.5.0",
     "sv-ttk>=2.6.0",
     "comtypes>=1.4.0",
+    "miniaudio>=1.60",
 ]
 
 [project.optional-dependencies]

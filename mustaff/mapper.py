@@ -188,6 +188,16 @@ class BeatMapper:
         if window_size_ms < 1:
             window_size_ms = 1000
 
+        half = self.keys // 2
+
+        def _hand(col: int) -> int:
+            """列所属的手：0=左手区，1=右手区（奇数列时中间列归右手）"""
+            return 0 if col < half else 1
+
+        col_last_time: Dict[int, float] = {}
+        last_col: Optional[int] = None
+        last_time: float = -1e9
+
         seg_start = 0
         while seg_start < len(non_chord):
             seg_end = seg_start + 1
@@ -199,26 +209,54 @@ class BeatMapper:
                     break
 
             seg_indices = non_chord[seg_start:seg_end]
-            seg_indices.sort(key=lambda i: features[i]["pitch_hz"] or 0)
 
-            used_columns = set()
-            band_positions: Dict[int, List[int]] = {}
-            for idx in seg_indices:
-                band = features[idx].get("band", 0)
-                band_positions.setdefault(band, []).append(idx)
+            # 音高 → 目标列：段内按音高排名做直方图均衡（分位数映射），
+            # 音高越高的音符映射到越靠右的列
+            ranked = [i for i in seg_indices if features[i]["pitch_hz"]]
+            ranked.sort(key=lambda i: features[i]["pitch_hz"])
+            m = len(ranked)
+            pitch_col: Dict[int, int] = {}
+            for r, i in enumerate(ranked):
+                if m > 1:
+                    pitch_col[i] = int(round(r / (m - 1) * (self.keys - 1)))
+                else:
+                    pitch_col[i] = (self.keys - 1) // 2
 
-            sorted_bands = sorted(band_positions.items())
-            for band, band_indices in sorted_bands:
-                for idx in band_indices:
-                    for col in range(self.keys):
-                        if col not in used_columns:
-                            assignments[idx] = col
-                            used_columns.add(col)
+            for i in seg_indices:
+                t = features[i]["time_ms"]
+                base = pitch_col.get(i)
+                if base is None:
+                    # 无音高时退化为频段映射
+                    band = int(features[i].get("band", 0) or 0)
+                    base = min(self.keys - 1, max(0, round(band / 2 * (self.keys - 1))))
+
+                gap = t - last_time
+                prefer_alt = last_col is not None and gap < 200.0
+
+                # 手感优化：快速连续段落中与上一音符同手时，优先镜像到另一只手
+                chosen = None
+                if prefer_alt and _hand(base) == _hand(last_col) and self.keys > 1:
+                    alt = (base + half) % self.keys
+                    if t - col_last_time.get(alt, -1e9) >= self.chord_gap_ms:
+                        chosen = alt
+
+                if chosen is None:
+                    # 冲突解析：按与目标列的距离升序，距离相同优先换手
+                    candidates = sorted(
+                        range(self.keys),
+                        key=lambda c: (
+                            abs(c - base),
+                            0 if (prefer_alt and _hand(c) != _hand(last_col)) else 1,
+                        ),
+                    )
+                    for c in candidates:
+                        if t - col_last_time.get(c, -1e9) >= self.chord_gap_ms:
+                            chosen = c
                             break
 
-            unassigned = [i for i in seg_indices if assignments[i] < 0]
-            for rank, idx in enumerate(unassigned):
-                assignments[idx] = rank % self.keys
+                assignments[i] = chosen
+                col_last_time[chosen] = t
+                last_col, last_time = chosen, t
 
             seg_start = seg_end
 

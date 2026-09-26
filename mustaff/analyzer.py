@@ -22,6 +22,19 @@ def _process_pitch_segment(y, fmin, fmax, sr, hop_length, seg_start, seg_end):
     return seg_start, p, probs
 
 
+def _decode_fallback(filepath: str, target_sr: int) -> Tuple[np.ndarray, int]:
+    """libsndfile 解码失败的兜底：用 miniaudio 解码（支持 mp3/flac/ogg/wav）"""
+    import miniaudio
+    decoded = miniaudio.decode_file(
+        filepath,
+        output_format=miniaudio.SampleFormat.FLOAT32,
+        nchannels=1,
+        sample_rate=target_sr,
+    )
+    y = np.frombuffer(decoded.samples, dtype=np.float32).copy()
+    return y, target_sr
+
+
 class AudioAnalyzer:
     """音频分析器，提取音游谱面所需的各种特征"""
 
@@ -66,9 +79,13 @@ class AudioAnalyzer:
         self.tempo: float = 120.0
 
     def load(self, filepath: str) -> "AudioAnalyzer":
-        self.y, sr_loaded = librosa.load(filepath, sr=self.sr, mono=True)
-        if sr_loaded != self.sr:
-            self.sr = sr_loaded
+        try:
+            self.y, sr_loaded = librosa.load(filepath, sr=self.sr, mono=True)
+            if sr_loaded != self.sr:
+                self.sr = sr_loaded
+        except Exception:
+            # libsndfile 无法解码时（部分 MP3 头不规范）退回 miniaudio
+            self.y, self.sr = _decode_fallback(filepath, self.sr)
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         return self
 
@@ -197,7 +214,40 @@ class AudioAnalyzer:
             y=self.y, sr=self.sr, hop_length=self.hop_length,
         )
         t = _scalar(tempo)
-        self.tempo = t if t > 0 else 120.0
+        if t <= 0:
+            t = 120.0
+
+        # 八度校正：以 2 的幂缩放，使 BPM 落入 [min_bpm, max_bpm]
+        factor = 1.0
+        for _ in range(16):
+            if t * factor < self.min_bpm:
+                factor *= 2.0
+            elif t * factor > self.max_bpm:
+                factor /= 2.0
+            else:
+                break
+        t = t * factor
+        if not (self.min_bpm <= t <= self.max_bpm):
+            # 八度比例无法落入范围（区间过窄）时直接截断
+            t = min(max(t, self.min_bpm), self.max_bpm)
+            factor = 0.0  # 非八度比例，跳过节拍帧调整
+
+        # 节拍帧与校正后的 BPM 保持一致
+        if factor > 1.0 and self.beat_frames is not None and len(self.beat_frames) > 1:
+            # BPM 翻倍：在相邻节拍间均匀插入细分帧
+            n_div = int(round(factor))
+            frames = self.beat_frames.astype(float)
+            pieces = [frames[:-1]]
+            for k in range(1, n_div):
+                pieces.append(frames[:-1] + (frames[1:] - frames[:-1]) * (k / n_div))
+            pieces.append(frames[-1:])
+            self.beat_frames = np.unique(np.round(np.concatenate(pieces)).astype(int))
+        elif 0.0 < factor < 1.0 and self.beat_frames is not None and len(self.beat_frames) > 1:
+            # BPM 减半：按比例抽减节拍帧
+            step = max(2, int(round(1.0 / factor)))
+            self.beat_frames = self.beat_frames[::step]
+
+        self.tempo = t
         self.beat_times = librosa.frames_to_time(
             self.beat_frames, sr=self.sr, hop_length=self.hop_length
         )
@@ -251,6 +301,22 @@ class AudioAnalyzer:
         self.rms = librosa.feature.rms(
             y=self.y, hop_length=self.hop_length
         )[0]
+
+    def get_offset_ms(self) -> float:
+        """谱面 offset（毫秒）：取最接近第一个 onset 的节拍点
+
+        节拍网格起点可能与音乐实际起点存在相位差，
+        用首个 onset 对齐到最近的节拍更稳健；无 onset 时退化为第一拍。
+        """
+        if self.onset_times is not None and len(self.onset_times) > 0:
+            first_onset = float(self.onset_times[0])
+            if self.beat_times is not None and len(self.beat_times) > 0:
+                idx = int(np.argmin(np.abs(self.beat_times - first_onset)))
+                return float(self.beat_times[idx]) * 1000.0
+            return first_onset * 1000.0
+        if self.beat_times is not None and len(self.beat_times) > 0:
+            return float(self.beat_times[0]) * 1000.0
+        return 0.0
 
     def get_beat_subdivisions(self, resolution: int = 8) -> np.ndarray:
         if self.beat_times is None or len(self.beat_times) < 2:

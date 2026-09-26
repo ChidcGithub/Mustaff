@@ -35,13 +35,18 @@ from matplotlib.figure import Figure
 
 from ..analyzer import AudioAnalyzer
 from ..mapper import BeatMapper
+from ..presets import DIFFICULTY_PRESETS, PRESET_ORDER
+from ..utils import split_artist_title
 from ..exporters.osu_mania import OsuManiaExporter
 from ..exporters.json_exporter import JsonExporter
+from ..exporters.malody import MalodyExporter
 from ..importers.json_importer import JsonImporter
 from ..importers.osu_importer import OsuImporter
 from ..importers.csv_importer import CsvImporter
+from ..importers.malody_importer import MalodyImporter
 from ..exporters.csv_exporter import CsvExporter
 from ..colors import lane_colors
+from ..clip import slice_notes, slice_audio_file
 from .preview_player import PreviewCanvas, AudioPlayer
 
 try:
@@ -85,9 +90,38 @@ class GenerateConfig:
     contrast: float = 1.0
     enable_double_hit: bool = False
     double_hit_threshold: float = 0.5
+    preset: str = "自定义"
+    csv_time_unit: str = "seconds"
+    use_ml: bool = False
+    ml_stars: float = 5.0
 
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mustaff_config.json")
+
+
+def _export_charts(notes, bpm, offset, keys, title, artist, version,
+                   out_dir, out_base, fmt, csv_time_unit, audio_filename):
+    """按指定格式导出一个难度的谱面（worker 线程内调用），返回导出描述列表"""
+    common = dict(notes=notes, bpm=bpm, offset=offset, keys=keys,
+                  title=title, artist=artist, version=version)
+    exported = []
+    if fmt in ("osu", "all"):
+        path = os.path.join(out_dir, f"{out_base}.osu")
+        OsuManiaExporter(audio_filename=audio_filename, **common).export(path)
+        exported.append(f"osu: {path}")
+    if fmt in ("json", "all"):
+        path = os.path.join(out_dir, f"{out_base}.json")
+        JsonExporter(**common).export(path)
+        exported.append(f"json: {path}")
+    if fmt in ("csv", "all"):
+        path = os.path.join(out_dir, f"{out_base}.csv")
+        CsvExporter(time_unit=csv_time_unit, **common).export(path)
+        exported.append(f"csv: {path}")
+    if fmt in ("mc", "all"):
+        path = os.path.join(out_dir, f"{out_base}.mc")
+        MalodyExporter(audio_filename=audio_filename, **common).export(path)
+        exported.append(f"mc: {path}")
+    return exported
 
 
 class MustaffGUI:
@@ -113,7 +147,9 @@ class MustaffGUI:
         self.current_title: str = ""
         self.current_audio_path: Optional[str] = None
         self.current_bpm: float = 0.0
+        self.current_offset: float = 0.0
         self.current_artist: str = "Unknown Artist"
+        self._snap_grid_ms: Optional[list] = None
         self.output_dir: str = os.getcwd()
         self._preview_mode = False
         self._audio_player: Optional[AudioPlayer] = None
@@ -188,6 +224,11 @@ class MustaffGUI:
                 "enable_double_hit": self.double_hit_var.get(),
                 "double_hit_threshold": self.double_hit_threshold_var.get(),
                 "format": self.format_var.get(),
+                "preset": self.preset_var.get(),
+                "use_ml": self.use_ml_var.get() == "ML 模型",
+                "ml_stars": self.ml_stars_var.get(),
+                "clip_start": self.clip_start_var.get(),
+                "clip_end": self.clip_end_var.get(),
             }
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -223,6 +264,11 @@ class MustaffGUI:
             self.double_hit_var.set(bool(cfg.get("enable_double_hit", False)))
             self.double_hit_threshold_var.set(float(cfg.get("double_hit_threshold", 0.5)))
             self.format_var.set(str(cfg.get("format", "all")))
+            self.preset_var.set(str(cfg.get("preset", "自定义")))
+            self.use_ml_var.set("ML 模型" if cfg.get("use_ml", False) else "启发式")
+            self.ml_stars_var.set(float(cfg.get("ml_stars", 5.0)))
+            self.clip_start_var.set(str(cfg.get("clip_start", "")))
+            self.clip_end_var.set(str(cfg.get("clip_end", "")))
             self._log("已恢复上次的配置")
         except Exception as e:
             self._log(f"[Error] 恢复配置失败: {e}")
@@ -467,6 +513,23 @@ class MustaffGUI:
         self.ln_var = tk.DoubleVar(value=0.7)
         ttk.Spinbox(param_frame, from_=0.0, to=1.0, increment=0.05, textvariable=self.ln_var, width=10).grid(row=3, column=1, sticky="w", pady=int(3*s))
 
+        ttk.Label(param_frame, text="难度预设:").grid(row=4, column=0, sticky="w", pady=int(3*s))
+        self.preset_var = tk.StringVar(value="自定义")
+        ttk.Combobox(param_frame, textvariable=self.preset_var,
+                     values=["自定义", "Easy", "Normal", "Hard", "Expert", "全部难度"],
+                     width=10, state="readonly").grid(row=4, column=1, sticky="w", pady=int(3*s))
+
+        ttk.Label(param_frame, text="生成方式:").grid(row=5, column=0, sticky="w", pady=int(3*s))
+        self.use_ml_var = tk.StringVar(value="启发式")
+        ttk.Combobox(param_frame, textvariable=self.use_ml_var,
+                     values=["启发式", "ML 模型"],
+                     width=10, state="readonly").grid(row=5, column=1, sticky="w", pady=int(3*s))
+
+        ttk.Label(param_frame, text="ML 星级 (1-10):").grid(row=6, column=0, sticky="w", pady=int(3*s))
+        self.ml_stars_var = tk.DoubleVar(value=5.0)
+        ttk.Spinbox(param_frame, from_=1.0, to=10.0, increment=0.5,
+                    textvariable=self.ml_stars_var, width=10).grid(row=6, column=1, sticky="w", pady=int(3*s))
+
         # ===== 高级选项 =====
         adv_frame = ttk.LabelFrame(inner, text="高级选项", padding=int(10*s))
         adv_frame.pack(fill="x", padx=int(5*s), pady=int(2*s))
@@ -559,6 +622,15 @@ class MustaffGUI:
         self.out_label.grid(row=0, column=0, sticky="ew", padx=(0, int(5*s)))
         ttk.Button(out_frame, text="更改...", command=self._browse_out).grid(row=0, column=1)
 
+        clip_frame = ttk.LabelFrame(inner, text="截取片段（秒，留空为整首）", padding=int(10*s))
+        clip_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
+        ttk.Label(clip_frame, text="起点:").grid(row=0, column=0, sticky="w")
+        self.clip_start_var = tk.StringVar(value="")
+        ttk.Entry(clip_frame, textvariable=self.clip_start_var, width=8).grid(row=0, column=1, padx=int(4*s))
+        ttk.Label(clip_frame, text="终点:").grid(row=0, column=2, sticky="w")
+        self.clip_end_var = tk.StringVar(value="")
+        ttk.Entry(clip_frame, textvariable=self.clip_end_var, width=8).grid(row=0, column=3, padx=int(4*s))
+
         prog_frame = ttk.LabelFrame(inner, text="进度", padding=int(5*s))
         prog_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
         self._status_label = ttk.Label(prog_frame, text="就绪", foreground="gray")
@@ -577,16 +649,25 @@ class MustaffGUI:
         self.back_btn = ttk.Button(btn_frame, text="← 返回静态预览", command=self._switch_to_static, state="disabled")
         self.back_btn.pack(fill="x", pady=int(2*s))
 
+        mode_row = ttk.Frame(btn_frame)
+        mode_row.pack(fill="x", pady=int(2*s))
+        self.mode_auto_btn = ttk.Button(mode_row, text="自动", command=lambda: self._set_preview_mode("auto"), state="disabled")
+        self.mode_auto_btn.pack(side="left", fill="x", expand=True)
+        self.mode_play_btn = ttk.Button(mode_row, text="可玩", command=lambda: self._set_preview_mode("play"), state="disabled")
+        self.mode_play_btn.pack(side="left", fill="x", expand=True, padx=int(2*s))
+        self.mode_edit_btn = ttk.Button(mode_row, text="编辑", command=lambda: self._set_preview_mode("edit"), state="disabled")
+        self.mode_edit_btn.pack(side="left", fill="x", expand=True)
+
         export_row = ttk.Frame(btn_frame)
         export_row.pack(fill="x", pady=int(2*s))
         self.format_var = tk.StringVar(value="all")
-        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "csv", "all"], width=6, state="readonly").pack(side="left")
+        ttk.Combobox(export_row, textvariable=self.format_var, values=["osu", "json", "csv", "mc", "all"], width=6, state="readonly").pack(side="left")
         self.export_btn = ttk.Button(export_row, text="导出", command=self._export, state="disabled")
         self.export_btn.pack(side="right", fill="x", expand=True, padx=(int(4*s), 0))
 
         about_frame = ttk.Frame(inner)
         about_frame.pack(fill="x", padx=int(5*s), pady=int(5*s))
-        ttk.Label(about_frame, text="Mustaff v0.5.5", foreground="gray",
+        ttk.Label(about_frame, text="Mustaff v1.0.0-rc1", foreground="gray",
                   font=("", 7)).pack(anchor="center")
         ttk.Label(about_frame, text="by ChidcGithub", foreground="gray",
                   font=("", 7)).pack(anchor="center")
@@ -714,10 +795,11 @@ class MustaffGUI:
         path = filedialog.askopenfilename(
             title="导入谱面文件",
             filetypes=[
-                ("谱面文件", "*.json *.osu *.csv"),
+                ("谱面文件", "*.json *.osu *.csv *.mc"),
                 ("JSON", "*.json"),
                 ("OSU", "*.osu"),
                 ("CSV", "*.csv"),
+                ("Malody", "*.mc"),
                 ("所有文件", "*.*"),
             ],
         )
@@ -730,6 +812,8 @@ class MustaffGUI:
                 importer = JsonImporter(path)
             elif ext == ".osu":
                 importer = OsuImporter(path)
+            elif ext == ".mc":
+                importer = MalodyImporter(path)
             elif ext == ".csv":
                 time_unit = self._ask_time_unit()
                 if time_unit is None:
@@ -747,6 +831,7 @@ class MustaffGUI:
             self.current_notes = info["notes"]
             self.current_keys = info["keys"]
             self.current_bpm = info["bpm"]
+            self.current_offset = info["offset"]
             self.current_title = info["title"]
             self.current_artist = info["artist"]
             self.current_duration_ms = max(n["time"] for n in info["notes"]) + 2000
@@ -793,6 +878,10 @@ class MustaffGUI:
         if self._worker_thread and self._worker_thread.is_alive():
             messagebox.showwarning("提示", "正在生成中，请稍候...")
             return
+        use_ml = self.use_ml_var.get() == "ML 模型"
+        if use_ml and self.keys_var.get() != 4:
+            messagebox.showwarning("提示", "ML 模型目前只支持 4K，请将轨道数改为 4")
+            return
 
         # 重置进度
         self._progress_bar["value"] = 0
@@ -804,6 +893,14 @@ class MustaffGUI:
         self._log("=" * 40)
         self._log("开始分析...")
         self._set_taskbar_progress(0)
+
+        preset = self.preset_var.get()
+        csv_time_unit = "seconds"
+        if preset == "全部难度" and self.format_var.get() in ("csv", "all"):
+            chosen = self._ask_time_unit()
+            if chosen is None:
+                return
+            csv_time_unit = chosen
 
         # 清空队列
         while not self._progress_queue.empty():
@@ -832,6 +929,10 @@ class MustaffGUI:
             contrast=self.contrast_var.get(),
             enable_double_hit=self.double_hit_var.get(),
             double_hit_threshold=self.double_hit_threshold_var.get(),
+            preset=preset,
+            csv_time_unit=csv_time_unit,
+            use_ml=use_ml,
+            ml_stars=self.ml_stars_var.get(),
         )
         self._worker_thread = threading.Thread(
             target=self._generate_worker,
@@ -858,37 +959,124 @@ class MustaffGUI:
             )
             analyzer.load(cfg.input_path)
 
+            if cfg.use_ml:
+                # ML 生成：只需节拍检测（BPM 用于导出元数据），跳过 pYIN 全量分析
+                import sys
+                repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                if repo_root not in sys.path:
+                    sys.path.insert(0, repo_root)
+                from training.generate import generate_notes_ml, models_available
+                if not models_available():
+                    raise RuntimeError("未找到训练好的模型 training/output/*.pt，请先运行 training 流程")
+
+                report(30, 100, "节拍检测...")
+                analyzer._analyze_beat()
+                report(50, 100, f"ML 生成中（{cfg.ml_stars:g}★）...")
+                notes = generate_notes_ml(analyzer.y, sr=analyzer.sr, keys=cfg.keys, stars=cfg.ml_stars)
+
+                offset = analyzer.get_offset_ms()
+                parsed_title, parsed_artist = split_artist_title(cfg.input_path)
+                artist = parsed_artist or "Unknown Artist"
+                snap_grid = analyzer.get_beat_subdivisions(resolution=4)
+                snap_grid_ms = [int(round(t * 1000)) for t in snap_grid] if len(snap_grid) else None
+                report(100, 100, "生成完成")
+                self._progress_queue.put({
+                    "type": "done",
+                    "notes": notes,
+                    "keys": cfg.keys,
+                    "duration_ms": int(analyzer.duration * 1000),
+                    "title": parsed_title,
+                    "audio_path": cfg.input_path,
+                    "bpm": analyzer.tempo,
+                    "offset": offset,
+                    "artist": artist,
+                    "snap_grid_ms": snap_grid_ms,
+                    "exported": [],
+                    "export_errors": [],
+                    "onset_count": 0,
+                    "duration_sec": analyzer.duration,
+                    "note_count": len(notes),
+                })
+                return
+
             def on_progress(pct: int, msg: str):
                 report(pct, 100, msg)
 
             analyzer.analyze(progress_callback=on_progress)
 
-            report(90, 100, "映射音符...")
+            report(88, 100, "映射音符...")
             features = analyzer.get_note_features()
+            offset = analyzer.get_offset_ms()
 
-            beat_subdivisions = None
-            if cfg.snap_to_beat:
-                beat_subdivisions = analyzer.get_beat_subdivisions(resolution=cfg.snap_resolution)
+            # 从文件名解析元数据："Artist - Title.mp3"
+            parsed_title, parsed_artist = split_artist_title(cfg.input_path)
+            artist = parsed_artist or "Unknown Artist"
+            base_name = os.path.splitext(os.path.basename(cfg.input_path))[0]
 
-            mapper = BeatMapper(
-                keys=cfg.keys,
-                density_filter_ms=cfg.density,
-                ln_threshold_ratio=cfg.ln_threshold,
-                snap_to_beat=cfg.snap_to_beat,
-                snap_resolution=cfg.snap_resolution,
-                complexity=cfg.complexity,
-                ln_tendency=cfg.ln_tendency,
-                contrast=cfg.contrast,
-                enable_double_hit=cfg.enable_double_hit,
-                double_hit_threshold=cfg.double_hit_threshold,
-            )
-            notes = mapper.map_notes(
-                features, beat_subdivisions=beat_subdivisions,
-                rms_full=analyzer.rms, pitches_full=analyzer.pitches,
-            )
+            # 编辑模式吸附网格（1/4 拍）
+            snap_grid = analyzer.get_beat_subdivisions(resolution=4)
+            snap_grid_ms = [int(round(t * 1000)) for t in snap_grid] if len(snap_grid) else None
+
+            # 难度任务列表: (难度名, BeatMapper 参数)
+            if cfg.preset == "全部难度":
+                job_list = [(name, dict(DIFFICULTY_PRESETS[name])) for name in PRESET_ORDER]
+            elif cfg.preset in DIFFICULTY_PRESETS:
+                job_list = [(cfg.preset, dict(DIFFICULTY_PRESETS[cfg.preset]))]
+            else:
+                job_list = [(cfg.difficulty, {
+                    "density_filter_ms": cfg.density,
+                    "ln_threshold_ratio": cfg.ln_threshold,
+                    "snap_to_beat": cfg.snap_to_beat,
+                    "snap_resolution": cfg.snap_resolution,
+                    "complexity": cfg.complexity,
+                    "ln_tendency": cfg.ln_tendency,
+                    "contrast": cfg.contrast,
+                    "enable_double_hit": cfg.enable_double_hit,
+                    "double_hit_threshold": cfg.double_hit_threshold,
+                })]
+
+            batch = cfg.preset == "全部难度"
+            fmt = self.format_var.get()
+            audio_filename = os.path.basename(cfg.input_path)
+            exported: list = []
+            export_errors: list = []
+            notes = None
+
+            for i, (name, mapper_kwargs) in enumerate(job_list):
+                report(88 + int(10 * i / len(job_list)), 100, f"映射音符 [{name}]...")
+                subdivisions = None
+                if mapper_kwargs.get("snap_to_beat"):
+                    subdivisions = analyzer.get_beat_subdivisions(
+                        resolution=mapper_kwargs.get("snap_resolution", 8)
+                    )
+                mapper = BeatMapper(keys=cfg.keys, **mapper_kwargs)
+                job_notes = mapper.map_notes(
+                    features, beat_subdivisions=subdivisions,
+                    rms_full=analyzer.rms, pitches_full=analyzer.pitches,
+                )
+                self._progress_queue.put({
+                    "type": "progress", "step": 90, "total": 100,
+                    "msg": f"[{name}] {len(job_notes)} 个音符",
+                })
+                # 预览使用 Normal（批量时）或唯一难度的结果
+                if notes is None or name == "Normal":
+                    notes = job_notes
+
+                if batch:
+                    try:
+                        paths = _export_charts(
+                            notes=job_notes, bpm=analyzer.tempo, offset=offset,
+                            keys=cfg.keys, title=parsed_title, artist=artist,
+                            version=name, out_dir=self.output_dir,
+                            out_base=f"{base_name} [{name}]", fmt=fmt,
+                            csv_time_unit=cfg.csv_time_unit,
+                            audio_filename=audio_filename,
+                        )
+                        exported.extend(paths)
+                    except Exception as e:
+                        export_errors.append(f"{name}: {e}")
 
             report(100, 100, "生成完成")
-            base_name = os.path.splitext(os.path.basename(cfg.input_path))[0]
 
             # 发送完成消息
             self._progress_queue.put({
@@ -896,9 +1084,14 @@ class MustaffGUI:
                 "notes": notes,
                 "keys": cfg.keys,
                 "duration_ms": int(analyzer.duration * 1000),
-                "title": base_name,
+                "title": parsed_title,
                 "audio_path": cfg.input_path,
                 "bpm": analyzer.tempo,
+                "offset": offset,
+                "artist": artist,
+                "snap_grid_ms": snap_grid_ms,
+                "exported": exported,
+                "export_errors": export_errors,
                 "onset_count": len(analyzer.onset_times) if analyzer.onset_times is not None else 0,
                 "duration_sec": analyzer.duration,
                 "note_count": len(notes),
@@ -929,12 +1122,19 @@ class MustaffGUI:
                     self.current_title = item["title"]
                     self.current_audio_path = item["audio_path"]
                     self.current_bpm = item["bpm"]
+                    self.current_offset = item.get("offset", 0.0)
+                    self.current_artist = item.get("artist", "Unknown Artist")
+                    self._snap_grid_ms = item.get("snap_grid_ms")
 
                     # 日志
                     self._log(f"BPM: {item['bpm']:.1f}")
                     self._log(f"Onset 数: {item['onset_count']}")
                     self._log(f"时长: {item['duration_sec']:.2f}s")
                     self._log(f"生成音符数: {item['note_count']}")
+                    for exp in item.get("exported", []):
+                        self._log(f"  导出 {exp}")
+                    for err in item.get("export_errors", []):
+                        self._log(f"[Error] 导出失败: {err}")
 
                     # 显示静态预览
                     self._draw_preview()
@@ -969,6 +1169,23 @@ class MustaffGUI:
             return
         self._draw_preview()
 
+    def _get_clip_range(self):
+        """读取截取区间输入，返回 (start_ms, end_ms)；None=不截取，False=输入有误"""
+        s_txt = self.clip_start_var.get().strip()
+        e_txt = self.clip_end_var.get().strip()
+        if not s_txt and not e_txt:
+            return None
+        try:
+            start_s = float(s_txt) if s_txt else 0.0
+            end_s = float(e_txt) if e_txt else self.current_duration_ms / 1000.0
+        except ValueError:
+            messagebox.showwarning("提示", "截取时间格式错误，请输入秒数（如 30 或 65.5）")
+            return False
+        if end_s <= start_s:
+            messagebox.showwarning("提示", "终点必须大于起点")
+            return False
+        return start_s * 1000.0, end_s * 1000.0
+
     def _export(self):
         if not self.current_notes:
             messagebox.showinfo("提示", "请先生成谱面")
@@ -987,6 +1204,34 @@ class MustaffGUI:
         base_name = self.current_title
         difficulty = self.diff_var.get()
         audio_basename = os.path.basename(self.current_audio_path) if self.current_audio_path else ""
+        offset = self.current_offset
+        notes_to_export = self.current_notes
+
+        # 截取片段：谱面过滤 + 音频切片
+        clip = self._get_clip_range()
+        if clip is False:
+            return
+        if clip is not None:
+            start_ms, end_ms = clip
+            notes_to_export = slice_notes(self.current_notes, start_ms, end_ms)
+            if not notes_to_export:
+                messagebox.showwarning("提示", "片段区间内没有音符")
+                return
+            offset = self.current_offset - start_ms
+            if self.current_audio_path:
+                try:
+                    sliced_path, _ = slice_audio_file(
+                        self.current_audio_path, start_ms, end_ms, self.output_dir
+                    )
+                    audio_basename = os.path.basename(sliced_path)
+                    base_name = os.path.splitext(audio_basename)[0]
+                    self._log(f"音频片段: {sliced_path}")
+                except Exception as e:
+                    messagebox.showerror("音频切片失败", str(e))
+                    return
+            else:
+                base_name = f"{base_name}.slice_{int(start_ms)}-{int(end_ms)}"
+                self._log("[Warn] 未关联音频，仅导出谱面片段")
         exported = []
 
         self.export_btn.config(state="disabled")
@@ -1000,7 +1245,8 @@ class MustaffGUI:
             with ThreadPoolExecutor(max_workers=3) as ex:
                 if fmt in ("osu", "all"):
                     _osu_exporter = OsuManiaExporter(
-                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        notes=notes_to_export, bpm=self.current_bpm, offset=offset,
+                        keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,
                         audio_filename=audio_basename,
                     )
@@ -1009,15 +1255,25 @@ class MustaffGUI:
 
                 if fmt in ("json", "all"):
                     _json_exporter = JsonExporter(
-                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        notes=notes_to_export, bpm=self.current_bpm, offset=offset,
+                        keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,
                     )
                     _json_path = os.path.join(self.output_dir, f"{base_name}.json")
                     export_futs.append(("json", _json_path, ex.submit(_json_exporter.export, _json_path)))
 
+                if fmt in ("mc", "all"):
+                    _mc_exporter = MalodyExporter(
+                        notes=notes_to_export, bpm=self.current_bpm, keys=self.current_keys,
+                        title=base_name, artist=self.current_artist, version=difficulty,
+                        audio_filename=audio_basename,
+                    )
+                    _mc_path = os.path.join(self.output_dir, f"{base_name}.mc")
+                    export_futs.append(("mc", _mc_path, ex.submit(_mc_exporter.export, _mc_path)))
+
                 if fmt in ("csv", "all"):
                     _csv_exporter = CsvExporter(
-                        notes=self.current_notes, bpm=self.current_bpm, keys=self.current_keys,
+                        notes=notes_to_export, bpm=self.current_bpm, keys=self.current_keys,
                         title=base_name, artist=self.current_artist, version=difficulty,
                         time_unit=csv_time_unit,
                     )
@@ -1089,6 +1345,9 @@ class MustaffGUI:
             duration_ms=self.current_duration_ms,
             audio_player=self._audio_player,
             scale=self._scale,
+            mode="auto",
+            on_notes_changed=self._on_notes_edited,
+            snap_grid_ms=self._snap_grid_ms,
         )
         self.preview_canvas.pack(fill="both", expand=True)
 
@@ -1102,6 +1361,9 @@ class MustaffGUI:
         self._preview_mode = True
         self.play_preview_btn.config(state="disabled")
         self.back_btn.config(state="normal")
+        self.mode_auto_btn.config(state="normal")
+        self.mode_play_btn.config(state="normal")
+        self.mode_edit_btn.config(state="normal")
         self.preview_canvas.focus_set()
 
     def _switch_to_static(self):
@@ -1118,6 +1380,26 @@ class MustaffGUI:
         self._preview_mode = False
         self.play_preview_btn.config(state="normal")
         self.back_btn.config(state="disabled")
+        self.mode_auto_btn.config(state="disabled")
+        self.mode_play_btn.config(state="disabled")
+        self.mode_edit_btn.config(state="disabled")
+
+    def _set_preview_mode(self, mode: str):
+        """切换预览器模式：自动 / 可玩 / 编辑"""
+        if self.preview_canvas is None:
+            return
+        self.preview_canvas.set_mode(mode)
+        self.preview_canvas.focus_set()
+        label = {"auto": "自动播放", "play": "可玩判定", "edit": "谱面编辑"}[mode]
+        self._log(f"预览模式: {label}")
+
+    def _on_notes_edited(self, notes):
+        """编辑器内谱面被修改的回调"""
+        self.current_notes = notes
+        self._status_label.config(
+            text=f"谱面已修改（{len(notes)} 个音符，导出将使用修改后的内容）",
+            foreground="#b26a00",
+        )
 
     def run(self):
         try:
