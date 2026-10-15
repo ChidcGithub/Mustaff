@@ -2,6 +2,15 @@
 Mustaff GUI 入口脚本（用于 PyInstaller 打包）
 在 tkinter 创建前设置 DPI Awareness，确保高分辨率屏幕渲染清晰。
 """
+# PyInstaller 打包后，multiprocessing 子进程（如"多进程音高检测"的进程池）
+# 会重新执行本脚本。freeze_support() 必须最先调用：
+# 子进程在此进入 multiprocessing 工作循环后直接退出，
+# 否则会继续向下执行 run_gui()，表现为分析时弹出多个 GUI 窗口。
+# 该调用在开发环境（未打包）下是空操作，无副作用。
+import multiprocessing
+
+multiprocessing.freeze_support()
+
 import ctypes
 import sys
 
