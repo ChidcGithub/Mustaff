@@ -55,3 +55,8 @@ Mustaff-Linux/
 # Training data & models（体积大，不入库）
 training/data/
 training/output/
+
+# 本地实验产物与测试音频（不入库）
+OneRepublic - Apologize.json
+songs for test purpose/
+音频表征-AB实验报告.md
