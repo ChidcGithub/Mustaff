@@ -94,6 +94,7 @@ class GenerateConfig:
     csv_time_unit: str = "seconds"
     use_ml: bool = False
     ml_stars: float = 5.0
+    ml_backend: str = "auto"
 
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mustaff_config.json")
@@ -227,6 +228,8 @@ class MustaffGUI:
                 "preset": self.preset_var.get(),
                 "use_ml": self.use_ml_var.get() == "ML 模型",
                 "ml_stars": self.ml_stars_var.get(),
+                "ml_backend": getattr(self, "_backend_id_by_display", {}).get(
+                    self.ml_backend_var.get(), "auto"),
                 "clip_start": self.clip_start_var.get(),
                 "clip_end": self.clip_end_var.get(),
             }
@@ -267,6 +270,10 @@ class MustaffGUI:
             self.preset_var.set(str(cfg.get("preset", "自定义")))
             self.use_ml_var.set("ML 模型" if cfg.get("use_ml", False) else "启发式")
             self.ml_stars_var.set(float(cfg.get("ml_stars", 5.0)))
+            saved_backend = str(cfg.get("ml_backend", "auto"))
+            inv = {v: k for k, v in getattr(self, "_backend_id_by_display", {}).items()}
+            if saved_backend in inv:
+                self.ml_backend_var.set(inv[saved_backend])
             self.clip_start_var.set(str(cfg.get("clip_start", "")))
             self.clip_end_var.set(str(cfg.get("clip_end", "")))
             self._log("已恢复上次的配置")
@@ -529,6 +536,19 @@ class MustaffGUI:
         self.ml_stars_var = tk.DoubleVar(value=5.0)
         ttk.Spinbox(param_frame, from_=1.0, to=10.0, increment=0.5,
                     textvariable=self.ml_stars_var, width=10).grid(row=6, column=1, sticky="w", pady=int(3*s))
+
+        ttk.Label(param_frame, text="ML 后端:").grid(row=7, column=0, sticky="w", pady=int(3*s))
+        self.ml_backend_var = tk.StringVar(value="auto（按优先级自动选择）")
+        self._backend_id_by_display = {"auto（按优先级自动选择）": "auto"}
+        self._ml_backends_cache: list = []
+        backend_row = ttk.Frame(param_frame)
+        backend_row.grid(row=7, column=1, sticky="w", pady=int(3*s))
+        self.ml_backend_combo = ttk.Combobox(backend_row, textvariable=self.ml_backend_var,
+                                             width=28, state="readonly")
+        self.ml_backend_combo.pack(side="left")
+        ttk.Button(backend_row, text="重新检测", width=8,
+                   command=self._refresh_ml_backends).pack(side="left", padx=(int(4*s), 0))
+        self._refresh_ml_backends()
 
         # ===== 高级选项 =====
         adv_frame = ttk.LabelFrame(inner, text="高级选项", padding=int(10*s))
@@ -871,6 +891,34 @@ class MustaffGUI:
             messagebox.showerror("导入失败", str(e))
             self._log(f"[Error] 导入失败: {e}")
 
+    def _refresh_ml_backends(self):
+        """扫描 training/output 权重，刷新 ML 后端下拉（多模型识别）"""
+        try:
+            import sys
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            from training.generate import list_backends
+            backends = list_backends()
+        except Exception as e:
+            self._log(f"[Warn] 模型检测失败: {e}")
+            backends = []
+        self._ml_backends_cache = backends
+        auto_disp = "auto（按优先级自动选择）"
+        mapping = {auto_disp: "auto"}
+        for b in backends:
+            mark = "✓" if b["available"] else "✗ 缺权重"
+            mapping[f"{b['id']} · {b['label']} [{mark}]"] = b["id"]
+        self._backend_id_by_display = mapping
+        self.ml_backend_combo["values"] = list(mapping.keys())
+        if self.ml_backend_var.get() not in mapping:
+            self.ml_backend_var.set(auto_disp)
+        detected = ", ".join(b["id"] for b in backends if b["available"]) or "无"
+        try:
+            self._log(f"模型检测: {detected}")
+        except Exception:
+            pass  # 启动早期日志区可能尚未就绪
+
     def _generate(self):
         if not self.input_path:
             messagebox.showwarning("提示", "请先选择一个音频文件")
@@ -882,6 +930,18 @@ class MustaffGUI:
         if use_ml and self.keys_var.get() != 4:
             messagebox.showwarning("提示", "ML 模型目前只支持 4K，请将轨道数改为 4")
             return
+        if use_ml:
+            backend_id = getattr(self, "_backend_id_by_display", {}).get(
+                self.ml_backend_var.get(), "auto")
+            if backend_id != "auto":
+                cached = {b["id"]: b["available"]
+                          for b in getattr(self, "_ml_backends_cache", [])}
+                if cached and not cached.get(backend_id, False):
+                    messagebox.showwarning(
+                        "提示",
+                        f"ML 后端 {backend_id} 不可用（缺权重或校验未通过）。\n"
+                        "请点击「重新检测」或改用 auto。")
+                    return
 
         # 重置进度
         self._progress_bar["value"] = 0
@@ -933,6 +993,8 @@ class MustaffGUI:
             csv_time_unit=csv_time_unit,
             use_ml=use_ml,
             ml_stars=self.ml_stars_var.get(),
+            ml_backend=getattr(self, "_backend_id_by_display", {}).get(
+                self.ml_backend_var.get(), "auto"),
         )
         self._worker_thread = threading.Thread(
             target=self._generate_worker,
@@ -971,8 +1033,9 @@ class MustaffGUI:
 
                 report(30, 100, "节拍检测...")
                 analyzer._analyze_beat()
-                report(50, 100, f"ML 生成中（{cfg.ml_stars:g}★）...")
-                notes = generate_notes_ml(analyzer.y, sr=analyzer.sr, keys=cfg.keys, stars=cfg.ml_stars)
+                report(50, 100, f"ML 生成中（{cfg.ml_backend}/{cfg.ml_stars:g}★）...")
+                notes = generate_notes_ml(analyzer.y, sr=analyzer.sr, keys=cfg.keys,
+                                          stars=cfg.ml_stars, backend=cfg.ml_backend)
 
                 offset = analyzer.get_offset_ms()
                 parsed_title, parsed_artist = split_artist_title(cfg.input_path)

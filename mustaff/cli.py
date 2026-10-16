@@ -82,6 +82,7 @@ class ProgressSpinner:
 @click.option("--double-hit-threshold", default=0.5, help="双音 RMS 能量阈值 (0.0-1.0)", show_default=True)
 @click.option("--ml/--no-ml", default=False, help="使用训练好的 ML 模型生成（需先运行 training 流程）", show_default=True)
 @click.option("--ml-stars", default=5.0, help="ML 生成的目标难度星级 (1-10)", show_default=True)
+@click.option("--ml-backend", type=click.Choice(["auto", "v3", "mert", "raw", "v2"], case_sensitive=False), default="auto", help="ML 后端（auto=按优先级自动选择，可用 --ml 检测结果回显）", show_default=True)
 @click.option("--clip-start", default=None, type=float, help="截取片段起点（秒），与 --clip-end 搭配")
 @click.option("--clip-end", default=None, type=float, help="截取片段终点（秒），与 --clip-start 搭配")
 def main(
@@ -113,6 +114,7 @@ def main(
     double_hit_threshold: float,
     ml: bool,
     ml_stars: float,
+    ml_backend: str,
     clip_start: Optional[float],
     clip_end: Optional[float],
 ):
@@ -162,13 +164,21 @@ def main(
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
         try:
-            from training.generate import generate_notes_ml, models_available
+            from training.generate import generate_notes_ml, list_backends, resolve_backend
         except ImportError as e:
             raise click.ClickException(f"ML 模块不可用（需要 torch 和 training/ 目录）: {e}")
-        if not models_available():
-            raise click.ClickException("未找到训练好的模型 training/output/*.pt，请先运行训练流程")
+        try:
+            chosen = resolve_backend(ml_backend)
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+        status = "  ".join(f"{b['id']}={'✓' if b['available'] else '✗'}" for b in list_backends())
+        click.echo(f"  模型检测: {status}  → 使用 {chosen}")
         spinner.update("ML 生成中...")
-        ml_notes = generate_notes_ml(analyzer.y, sr=analyzer.sr, keys=keys, stars=ml_stars)
+        try:
+            ml_notes = generate_notes_ml(analyzer.y, sr=analyzer.sr, keys=keys, stars=ml_stars,
+                                         backend=ml_backend)
+        except (RuntimeError, ImportError) as e:
+            raise click.ClickException(str(e))
         click.echo(f"  音符数 [ML {ml_stars:g}★]: {len(ml_notes)}")
 
     # 难度任务列表: (难度名, 输出文件名后缀, BeatMapper 参数；None 表示用 ml_notes)

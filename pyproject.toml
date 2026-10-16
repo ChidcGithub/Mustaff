@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mustaff"
-version = "1.0.3"
+version = "1.1.0"
 description = "自动从音频生成音游曲谱的工具"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -38,6 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["gradio>=4.0"]
+mert = ["transformers>=4.40"]
 dev = ["pytest>=7.0", "black", "flake8"]
 
 [project.scripts]

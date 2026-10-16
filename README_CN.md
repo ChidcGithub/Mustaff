@@ -67,6 +67,9 @@ mustaff-cli "song.mp3" --keys 4 --format both --preview -o ./output
 # 生成 7K 谱面并指定难度名
 mustaff-cli "song.flac" --keys 7 --format osu --difficulty "Hard" -o ./maps
 
+# ML 生成并显式指定后端（auto = 按优先级自动选择）
+mustaff-cli "song.mp3" --ml --ml-backend mert --ml-stars 5 -o ./output
+
 # 查看全部参数
 mustaff-cli --help
 ```
@@ -105,7 +108,7 @@ exporter.export("song.osu")
 python -m mustaff.gui.app
 ```
 
-启动图形界面后，选择音频文件、调整参数并点击**生成谱面**。生成完成后点击**播放预览**即可进入交互式下落式预览模式。
+启动图形界面后，选择音频文件、调整参数并点击**生成谱面**。生成方式选为 ML 模型时，可通过 **ML 后端** 下拉框在已识别的后端（v3/mert/raw/v2，✓ 表示权重就绪）间切换，**重新检测** 按钮可重扫 `training/output/`。生成完成后点击**播放预览**即可进入交互式下落式预览模式。
 
 ---
 
@@ -147,6 +150,23 @@ Mustaff/
 | 音频播放 | `pygame.mixer.music` |
 | GUI 渲染 | `tkinter.Canvas` 动态自适应 |
 | 静态预览 | `matplotlib`（暗色主题） |
+
+---
+
+---
+
+## ML 谱面生成（可选）
+
+除规则算法外，Mustaff 支持用训练好的 ML 模型直接生成谱面（--ml / GUI「生成方式 → ML 模型」）。权重放在 	raining/output/，运行时按以下优先级自动选择：
+
+| 后端 | 权重文件 | 说明 |
+|---|---|---|
+| v3（默认） | placement_v3_best.pt + selection_v3_best.pt | 节拍网格 Transformer + 组合 LSTM，手工特征 |
+| v5-mert（实验） | placement_mert_best.pt + selection_mert_best.pt | 冻结 MERT-v1-95M 编码器（每拍 8×768）+ 同款网格结构；推理需 	ransformers 与 MERT 权重。selection 反超 v3（combo acc 0.436 vs 0.429），placement 仍低于 v3 |
+| v4-raw（实验） | placement_raw_best.pt + selection_raw_best.pt | 原始波形卷积前端 + 同款网格结构 |
+| v2（回退） | placement_best.pt + selection_best.pt | 帧级 CNN/LSTM |
+
+设置环境变量 MUSTAFF_ML_BACKEND=mert|raw|v3|v2 可强制指定后端。在当前数据规模（2,912 曲集）下，test 集三方 A/B 显示 v3 的 placement 仍最优（slot F1 0.678 vs mert 0.536 / raw 0.481），而 mert 的 selection 反超 v3（combo acc 0.436 vs 0.429），故默认仍为 v3；详见 	raining/output/eval_ab_*.json 与 	raining/ 内脚本。
 
 ---
 

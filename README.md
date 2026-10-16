@@ -69,6 +69,9 @@ mustaff-cli "song.mp3" --keys 4 --format both --preview -o ./output
 # 7K beatmap with custom difficulty
 mustaff-cli "song.flac" --keys 7 --format osu --difficulty "Hard" -o ./maps
 
+# ML generation with an explicit backend (auto = priority fallback)
+mustaff-cli "song.mp3" --ml --ml-backend mert --ml-stars 5 -o ./output
+
 # View all options
 mustaff-cli --help
 ```
@@ -107,7 +110,7 @@ exporter.export("song.osu")
 python -m mustaff.gui.app
 ```
 
-Launch the graphical interface, select an audio file, adjust parameters, and click **Generate**. Use **Play Preview** to enter the interactive falling-note preview mode.
+Launch the graphical interface, select an audio file, adjust parameters, and click **Generate**. With 生成方式 set to ML 模型, the **ML 后端** dropdown lists all detected backends (v3/mert/raw/v2, ✓ = weights found) and switches between them; click **重新检测** to rescan `training/output/`. Use **Play Preview** to enter the interactive falling-note preview mode.
 
 ---
 
@@ -149,6 +152,23 @@ Mustaff/
 | Audio Playback | `pygame.mixer.music` |
 | GUI Rendering | `tkinter.Canvas` with dynamic resize |
 | Static Preview | `matplotlib` (dark theme) |
+
+---
+
+---
+
+## ML Chart Generation (Optional)
+
+Beyond the rule-based pipeline, Mustaff can generate charts with pre-trained ML models (--ml / GUI menu). Weights live in 	raining/output/ and are auto-selected in this order:
+
+| Backend | Weights | Notes |
+|---|---|---|
+| v3 (default) | placement_v3_best.pt + selection_v3_best.pt | Beat-grid Transformer + combo LSTM on hand-crafted features |
+| v5-mert (experimental) | placement_mert_best.pt + selection_mert_best.pt | Frozen MERT-v1-95M encoder (per-beat 8x768) + same beat-grid structure; needs 	ransformers and MERT weights at inference. Wins on selection (combo acc 0.436 vs 0.429) but placement still below v3 |
+| v4-raw (experimental) | placement_raw_best.pt + selection_raw_best.pt | Raw-waveform conv frontend + same beat-grid structure |
+| v2 (fallback) | placement_best.pt + selection_best.pt | Frame-level CNN/LSTM |
+
+Set MUSTAFF_ML_BACKEND=mert|raw|v3|v2 to force a backend. At the current dataset scale (2,912 beatmap sets) the three-way A/B on the test split shows v3 placement still leads (slot F1 0.678 vs mert 0.536 / raw 0.481) while mert selection slightly beats v3 (combo acc 0.436 vs 0.429), so v3 remains the default; see 	raining/output/eval_ab_*.json and 	raining/ scripts for reproduction.
 
 ---
 
